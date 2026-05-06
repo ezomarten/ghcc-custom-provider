@@ -4,7 +4,7 @@
 
 GHCC Custom Provider は、Visual Studio Code の Language Model Chat Provider API を使って、GitHub Copilot Chat を OpenAI 互換エンドポイントや LM Studio に接続する拡張機能です。チャット対応 API を公開しているセルフホスト環境やサードパーティーのバックエンド向けに設計されています。Ollama 互換プロキシではなく、従来のプロキシ方式をそのまま置き換えるものでもありません。
 
-> ステータス: 現行リリースは 0.1.1 です。汎用の既定経路は `OpenAI-compatible` です。LM Studio では、ネイティブのモデル情報取得と OpenAI-compatible チャットを組み合わせる `LM Studio` を推奨します。LM Studio のネイティブチャット挙動が必要な場合だけ `LM Studio Native` を選んでください。
+> ステータス: 現行リリースは 0.1.2 です。汎用の既定経路は `OpenAI-compatible` です。LM Studio では、ネイティブのモデル情報取得と OpenAI-compatible チャットを組み合わせる `LM Studio` を推奨します。LM Studio のネイティブチャット挙動が必要な場合だけ `LM Studio Native` を選んでください。
 
 ## 主な機能
 
@@ -43,6 +43,8 @@ GHCC Custom Provider は、Visual Studio Code の Language Model Chat Provider A
 
 - `Send tools to endpoint`: 推論優先のローカルモデルや、VS Code のツール定義を渡したくない接続先では `Off` にします。
 - `Tool limit`: 広告するツール数と転送するツール数を減らしたいときに使います。
+- `Preserved thinking limit`: `reasoning_content` として保存または再送する hidden thinking の上限です。未入力時は `64000` 文字までです。`0` にすると LM Studio Native の response ID などは残しつつ推論本文を破棄できます。`-1` は無制限ですが非推奨です。
+- `Synthetic replay limit`: 合成 system replay prompt に入れる hidden thinking の上限です。未入力時は `12000` 文字までです。`0` にすると合成 replay を無効化できます。`-1` は無制限ですが非推奨です。
 - `Model Picker`: バックエンドモデルをモデルピッカーへ既定で表示できます。これを Off にしても、接続先が未設定・未接続の間は setup 項目を表示し続けるため、管理画面は開き直しやすいままです。
 - `Common Settings`: 問題切り分け時に Probe モデル、詳細ログ、会話メモリの永続化を有効にできます。
 - `Model Overrides`: 全モデル向けのツール対応、画像対応、トークン上限は簡易欄でまとめて上書きでき、必要なら従来どおり詳細JSONでモデルごとの調整もできます。

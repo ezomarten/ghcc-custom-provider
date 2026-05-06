@@ -28,6 +28,7 @@ const MAX_MIME_TYPE_LENGTH = 200;
 const MAX_CONTEXT_LENGTH = 10_000_000;
 const MAX_OUTPUT_TOKENS = 1_000_000;
 const MAX_ADVERTISED_TOOL_LIMIT = 512;
+const MAX_PRESERVED_THINKING_CHARS = 1_000_000;
 const MAX_CONVERSATION_TTL_MINUTES = 525_600;
 const MAX_CONVERSATION_ENTRIES = 5_000;
 const LEGACY_REASONING_MODEL_SUFFIX = '::reasoning';
@@ -42,6 +43,8 @@ export interface BackendRequestOverrides {
   lmStudioReasoning: LmStudioReasoningMode;
   enableThinking: SettingToggleMode;
   preserveThinking: SettingToggleMode;
+  preservedThinkingMaxChars?: number;
+  syntheticReasoningReplayMaxChars?: number;
   contextLength?: number;
   maxTokens?: number;
   temperature?: number;
@@ -137,6 +140,8 @@ export function createDefaultBackendEndpointSettings(
       lmStudioReasoning: 'auto',
       enableThinking: 'auto',
       preserveThinking: 'auto',
+      preservedThinkingMaxChars: undefined,
+      syntheticReasoningReplayMaxChars: undefined,
       contextLength: undefined,
       maxTokens: undefined,
       temperature: undefined,
@@ -383,6 +388,8 @@ export function sanitizeRequestOverrides(raw: unknown): BackendRequestOverrides 
     lmStudioReasoning: normalizeLmStudioReasoningMode(source.lmStudioReasoning),
     enableThinking: normalizeToggleMode(source.enableThinking),
     preserveThinking: normalizeToggleMode(source.preserveThinking),
+    preservedThinkingMaxChars: parseOptionalThinkingCharLimit(source.preservedThinkingMaxChars, MAX_PRESERVED_THINKING_CHARS),
+    syntheticReasoningReplayMaxChars: parseOptionalThinkingCharLimit(source.syntheticReasoningReplayMaxChars, MAX_PRESERVED_THINKING_CHARS),
     contextLength: parseOptionalInteger(source.contextLength, MAX_CONTEXT_LENGTH),
     maxTokens: parseOptionalInteger(source.maxTokens, MAX_OUTPUT_TOKENS),
     temperature: parseOptionalNumber(source.temperature),
@@ -657,6 +664,29 @@ function parseOptionalInteger(value: unknown, maxValue = Number.MAX_SAFE_INTEGER
   if (typeof value === 'string' && value.trim()) {
     const parsed = Number.parseInt(value, 10);
     if (Number.isInteger(parsed) && parsed > 0) {
+      return Math.min(parsed, maxValue);
+    }
+  }
+
+  return undefined;
+}
+
+function parseOptionalThinkingCharLimit(value: unknown, maxValue = Number.MAX_SAFE_INTEGER): number | undefined {
+  if (typeof value === 'number' && Number.isInteger(value) && value === -1) {
+    return -1;
+  }
+
+  if (typeof value === 'number' && Number.isInteger(value) && value >= 0) {
+    return Math.min(value, maxValue);
+  }
+
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number.parseInt(value, 10);
+    if (Number.isInteger(parsed) && parsed === -1) {
+      return -1;
+    }
+
+    if (Number.isInteger(parsed) && parsed >= 0) {
       return Math.min(parsed, maxValue);
     }
   }

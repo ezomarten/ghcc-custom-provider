@@ -356,7 +356,12 @@ export class BridgeChatProvider implements vscode.LanguageModelChatProvider<Brid
       },
     );
 
-    const hiddenReasoningContent = truncateHiddenReasoningContent(result.reasoningContent, this.outputChannel, `${upstreamModelId} @ ${endpoint.id}`);
+    const hiddenReasoningContent = limitPreservedReasoningContent(
+      result.reasoningContent,
+      endpoint.requestOverrides,
+      this.outputChannel,
+      `${upstreamModelId} @ ${endpoint.id}`,
+    );
     if (!hasVisibleAssistantOutput(result.content, result.toolCalls)) {
       this.outputChannel.warn(
         `Backend response for ${upstreamModelId} (${endpoint.id}) completed without visible assistant output. finishReason=${result.finishReason ?? 'unknown'}, reasoningLength=${hiddenReasoningContent.trim().length}, toolCalls=${result.toolCalls.length}`,
@@ -492,6 +497,7 @@ function buildBackendPayload(
       payload,
       effectiveState?.reasoningContent,
       requestOverrides,
+      outputChannel,
     );
     const requestOverrideKeys = getConfiguredRequestOverrideKeys(endpointType, requestOverrides);
     if (syntheticReasoningReplay.usedSyntheticReasoningReplay && !requestOverrideKeys.includes('system_prompt')) {
@@ -512,9 +518,17 @@ function buildBackendPayload(
   }
 
   const openAIMessages = mapRequestMessagesToOpenAI(messages, hiddenStateMimeType);
+  limitOpenAIMessageReasoningContents(openAIMessages.messages, requestOverrides, outputChannel, `${model.id} request transcript`);
+  openAIMessages.replayedReasoningLength = findLastAssistantReasoningLength(openAIMessages.messages);
   let usedProviderMemoryFallback = false;
   if (!openAIMessages.latestBackendState?.reasoningContent.trim() && providerMemoryState?.reasoningContent.trim()) {
-    const replayResult = attachReasoningStateToOpenAIMessages(openAIMessages.messages, providerMemoryState.reasoningContent);
+    const providerMemoryReasoning = limitPreservedReasoningContent(
+      providerMemoryState.reasoningContent,
+      requestOverrides,
+      outputChannel,
+      `${model.id} provider memory`,
+    );
+    const replayResult = attachReasoningStateToOpenAIMessages(openAIMessages.messages, providerMemoryReasoning);
     openAIMessages.replayedReasoningLength = replayResult.replayedReasoningLength;
     openAIMessages.usedFallbackAssistantAttachment ||= replayResult.usedFallbackAssistantAttachment;
     usedProviderMemoryFallback = replayResult.replayedReasoningLength > 0;
@@ -697,6 +711,7 @@ function attachSyntheticReasoningReplayPromptToLmStudioPayload(
   payload: Record<string, unknown>,
   reasoningContent: string | undefined,
   requestOverrides: BackendRequestOverrides,
+  outputChannel: vscode.LogOutputChannel,
 ): { replayedReasoningLength: number; syntheticReasoningReplayLength: number; usedSyntheticReasoningReplay: boolean } {
   if (requestOverrides.preserveThinking !== 'on') {
     return {
@@ -706,7 +721,12 @@ function attachSyntheticReasoningReplayPromptToLmStudioPayload(
     };
   }
 
-  const normalizedReasoning = reasoningContent?.trim() ?? '';
+  const normalizedReasoning = limitPreservedReasoningContent(
+    reasoningContent ?? '',
+    requestOverrides,
+    outputChannel,
+    'LM Studio synthetic reasoning replay',
+  ).trim();
   if (!normalizedReasoning) {
     return {
       replayedReasoningLength: 0,
@@ -715,7 +735,15 @@ function attachSyntheticReasoningReplayPromptToLmStudioPayload(
     };
   }
 
-  const replayContent = buildSyntheticReasoningReplayContent(normalizedReasoning);
+  const replayContent = buildSyntheticReasoningReplayContent(normalizedReasoning, getSyntheticReasoningReplayMaxChars(requestOverrides));
+  if (!replayContent.trim()) {
+    return {
+      replayedReasoningLength: normalizedReasoning.length,
+      syntheticReasoningReplayLength: 0,
+      usedSyntheticReasoningReplay: false,
+    };
+  }
+
   const existingSystemPrompt = typeof payload.system_prompt === 'string' ? payload.system_prompt.trim() : '';
   payload.system_prompt = existingSystemPrompt ? `${existingSystemPrompt}\n\n${replayContent}` : replayContent;
 
@@ -785,7 +813,14 @@ function attachSyntheticReasoningReplayMessage(
     };
   }
 
-  const replayContent = buildSyntheticReasoningReplayContent(normalizedReasoning);
+  const replayContent = buildSyntheticReasoningReplayContent(normalizedReasoning, getSyntheticReasoningReplayMaxChars(requestOverrides));
+  if (!replayContent.trim()) {
+    return {
+      syntheticReasoningReplayLength: 0,
+      usedSyntheticReasoningReplay: false,
+    };
+  }
+
   prependSystemReplayMessage(messages, replayContent);
 
   return {
@@ -843,17 +878,22 @@ function findLatestAssistantReasoningContent(messages: readonly OpenAIWireMessag
   return '';
 }
 
-function buildSyntheticReasoningReplayContent(reasoningContent: string): string {
+function buildSyntheticReasoningReplayContent(reasoningContent: string, charLimit: number): string {
   const trimmedReasoning = reasoningContent.trim();
-  if (trimmedReasoning.length <= SYNTHETIC_REASONING_REPLAY_CHAR_LIMIT) {
+  if (charLimit <= 0) {
+    return '';
+  }
+
+  if (trimmedReasoning.length <= charLimit) {
     return `${SYNTHETIC_REASONING_REPLAY_PREFIX}\n${trimmedReasoning}`;
   }
 
   const truncationMarker = '\n[... truncated reasoning replay ...]\n';
-  const remainingLength = SYNTHETIC_REASONING_REPLAY_CHAR_LIMIT - truncationMarker.length;
+  const remainingLength = Math.max(0, charLimit - truncationMarker.length);
   const headLength = Math.floor(remainingLength / 2);
   const tailLength = remainingLength - headLength;
-  return `${SYNTHETIC_REASONING_REPLAY_PREFIX}\n${trimmedReasoning.slice(0, headLength)}${truncationMarker}${trimmedReasoning.slice(-tailLength)}`;
+  const tail = tailLength > 0 ? trimmedReasoning.slice(-tailLength) : '';
+  return `${SYNTHETIC_REASONING_REPLAY_PREFIX}\n${trimmedReasoning.slice(0, headLength)}${truncationMarker}${tail}`;
 }
 
 function getConfiguredRequestOverrideKeys(
@@ -876,6 +916,14 @@ function getConfiguredRequestOverrideKeys(
 
   if (endpointType === 'openai-compatible' && requestOverrides.preserveThinking !== 'auto') {
     keys.push('preserve_thinking');
+  }
+
+  if (requestOverrides.preservedThinkingMaxChars !== undefined) {
+    keys.push('preserved_thinking_max_chars');
+  }
+
+  if (requestOverrides.syntheticReasoningReplayMaxChars !== undefined) {
+    keys.push('synthetic_reasoning_replay_max_chars');
   }
 
   if (requestOverrides.contextLength !== undefined) {
@@ -996,15 +1044,65 @@ function deepMergeObjects(base: Record<string, unknown>, override: Record<string
   return result;
 }
 
-function truncateHiddenReasoningContent(value: string, outputChannel: vscode.LogOutputChannel, modelId: string): string {
-  if (value.length <= MAX_HIDDEN_REASONING_CONTENT_CHARS) {
+function limitOpenAIMessageReasoningContents(
+  messages: OpenAIWireMessage[],
+  requestOverrides: BackendRequestOverrides,
+  outputChannel: vscode.LogOutputChannel,
+  label: string,
+): void {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role !== 'assistant' || typeof message.reasoning_content !== 'string') {
+      continue;
+    }
+
+    const limited = limitPreservedReasoningContent(message.reasoning_content, requestOverrides, outputChannel, label);
+    if (limited.trim()) {
+      message.reasoning_content = limited;
+    } else {
+      delete message.reasoning_content;
+      if (!hasOpenAIAssistantMessagePayload(message)) {
+        messages.splice(index, 1);
+      }
+    }
+  }
+}
+
+function hasOpenAIAssistantMessagePayload(message: { content: string | null; tool_calls?: readonly unknown[]; reasoning_content?: string }): boolean {
+  return Boolean(message.content?.trim() || message.tool_calls?.length || message.reasoning_content?.trim());
+}
+
+function limitPreservedReasoningContent(
+  value: string,
+  requestOverrides: BackendRequestOverrides,
+  outputChannel: vscode.LogOutputChannel,
+  label: string,
+): string {
+  const maxChars = getPreservedThinkingMaxChars(requestOverrides);
+  if (value.length <= maxChars) {
     return value;
   }
 
   outputChannel.warn(
-    `Truncated backend hidden reasoning state for ${modelId} from ${value.length} to ${MAX_HIDDEN_REASONING_CONTENT_CHARS} characters.`,
+    `Truncated preserved thinking for ${label} from ${value.length} to ${maxChars} characters.`,
   );
-  return value.slice(-MAX_HIDDEN_REASONING_CONTENT_CHARS);
+  return maxChars > 0 ? value.slice(-maxChars) : '';
+}
+
+function getPreservedThinkingMaxChars(requestOverrides: BackendRequestOverrides): number {
+  if (requestOverrides.preservedThinkingMaxChars === -1) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  return requestOverrides.preservedThinkingMaxChars ?? MAX_HIDDEN_REASONING_CONTENT_CHARS;
+}
+
+function getSyntheticReasoningReplayMaxChars(requestOverrides: BackendRequestOverrides): number {
+  if (requestOverrides.syntheticReasoningReplayMaxChars === -1) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  return requestOverrides.syntheticReasoningReplayMaxChars ?? SYNTHETIC_REASONING_REPLAY_CHAR_LIMIT;
 }
 
 function hasVisibleAssistantOutput(content: string, toolCalls: readonly unknown[]): boolean {

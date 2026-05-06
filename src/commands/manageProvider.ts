@@ -416,6 +416,16 @@ async function renderPanelHtml(
                 </select>
                 <div class="hint">${text.requestOverrides.preserveThinkingHint}</div>
               </dd>
+              <dt>${text.requestOverrides.preservedThinkingMaxChars}</dt>
+              <dd>
+                <input id="preservedThinkingMaxChars" type="number" min="-1" step="1" placeholder="${escapeHtmlAttribute(text.requestOverrides.preservedThinkingMaxCharsPlaceholder)}" />
+                <div class="hint">${text.requestOverrides.preservedThinkingMaxCharsHint}</div>
+              </dd>
+              <dt>${text.requestOverrides.syntheticReasoningReplayMaxChars}</dt>
+              <dd>
+                <input id="syntheticReasoningReplayMaxChars" type="number" min="-1" step="1" placeholder="${escapeHtmlAttribute(text.requestOverrides.syntheticReasoningReplayMaxCharsPlaceholder)}" />
+                <div class="hint">${text.requestOverrides.syntheticReasoningReplayMaxCharsHint}</div>
+              </dd>
               <dt>${text.requestOverrides.contextLength}</dt>
               <dd><input id="contextLength" type="number" min="1" step="1" placeholder="${escapeHtmlAttribute(text.requestOverrides.contextLengthPlaceholder)}" /></dd>
               <dt>${text.requestOverrides.maxTokens}</dt>
@@ -1076,6 +1086,8 @@ const elements = {
   lmStudioReasoning: document.getElementById('lmStudioReasoning'),
   enableThinking: document.getElementById('enableThinking'),
   preserveThinking: document.getElementById('preserveThinking'),
+  preservedThinkingMaxChars: document.getElementById('preservedThinkingMaxChars'),
+  syntheticReasoningReplayMaxChars: document.getElementById('syntheticReasoningReplayMaxChars'),
   testConnectionButton: document.getElementById('testConnectionButton'),
   connectionStatusBadge: document.getElementById('connectionStatusBadge'),
   connectionStatusSummary: document.getElementById('connectionStatusSummary'),
@@ -1470,6 +1482,8 @@ function attachEventHandlers() {
     elements.lmStudioReasoning,
     elements.enableThinking,
     elements.preserveThinking,
+    elements.preservedThinkingMaxChars,
+    elements.syntheticReasoningReplayMaxChars,
     elements.contextLength,
     elements.maxTokens,
     elements.temperature,
@@ -1671,6 +1685,8 @@ function populateEndpointInputs(endpoint) {
   elements.lmStudioReasoning.value = endpoint.requestOverrides.lmStudioReasoning || 'auto';
   elements.enableThinking.value = endpoint.requestOverrides.enableThinking || 'auto';
   elements.preserveThinking.value = endpoint.requestOverrides.preserveThinking || 'auto';
+  elements.preservedThinkingMaxChars.value = stringifyOptionalNumber(endpoint.requestOverrides.preservedThinkingMaxChars);
+  elements.syntheticReasoningReplayMaxChars.value = stringifyOptionalNumber(endpoint.requestOverrides.syntheticReasoningReplayMaxChars);
   elements.contextLength.value = stringifyOptionalNumber(endpoint.requestOverrides.contextLength);
   elements.maxTokens.value = stringifyOptionalNumber(endpoint.requestOverrides.maxTokens);
   elements.temperature.value = stringifyOptionalNumber(endpoint.requestOverrides.temperature);
@@ -1800,6 +1816,8 @@ function syncSelectedEndpointFromInputs() {
   endpoint.requestOverrides.lmStudioReasoning = normalizeLmStudioReasoning(elements.lmStudioReasoning.value);
   endpoint.requestOverrides.enableThinking = normalizeToggleMode(elements.enableThinking.value);
   endpoint.requestOverrides.preserveThinking = normalizeToggleMode(elements.preserveThinking.value);
+  endpoint.requestOverrides.preservedThinkingMaxChars = parseOptionalThinkingCharLimit(elements.preservedThinkingMaxChars.value);
+  endpoint.requestOverrides.syntheticReasoningReplayMaxChars = parseOptionalThinkingCharLimit(elements.syntheticReasoningReplayMaxChars.value);
   endpoint.requestOverrides.contextLength = parseOptionalPositiveInteger(elements.contextLength.value);
   endpoint.requestOverrides.maxTokens = parseOptionalPositiveInteger(elements.maxTokens.value);
   endpoint.requestOverrides.temperature = parseOptionalNumber(elements.temperature.value);
@@ -1978,6 +1996,8 @@ function createEndpointTemplate(index) {
       lmStudioReasoning: 'auto',
       enableThinking: 'auto',
       preserveThinking: 'auto',
+      preservedThinkingMaxChars: undefined,
+      syntheticReasoningReplayMaxChars: undefined,
       contextLength: undefined,
       maxTokens: undefined,
       temperature: undefined,
@@ -2030,6 +2050,16 @@ function parseOptionalPositiveInteger(value) {
 
   const parsed = Number.parseInt(normalized, 10);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function parseOptionalThinkingCharLimit(value) {
+  const normalized = String(value || '').trim();
+  if (!normalized) {
+    return undefined;
+  }
+
+  const parsed = Number.parseInt(normalized, 10);
+  return Number.isInteger(parsed) && (parsed === -1 || parsed >= 0) ? parsed : undefined;
 }
 
 function parseOptionalNumber(value) {

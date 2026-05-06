@@ -5,19 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-Move shipped changes into a dated version heading and keep [Unreleased]
-for work that has not been published yet.
+Add an [Unreleased] section only while unpublished changes exist. Remove it again when shipping a release if nothing remains unreleased.
 
-## [Unreleased]
+## [0.1.2] - 2026-05-07
 
 ### Added
-- None yet.
+- Added separate per-endpoint limits for preserved hidden reasoning and synthetic replay prompts in Manage Provider.
+- Added an advanced `-1` option to remove either preserved-thinking cap when needed.
 
 ### Changed
-- None yet.
+- Split preserved hidden reasoning and synthetic replay prompt limits into separate settings with explicit defaults of 64000 and 12000 characters.
+- Shortened the user-facing help text for preserved-thinking controls and aligned README guidance with the new settings.
 
 ### Fixed
-- None yet.
+- Avoided conflating stored `reasoning_content` replay limits with synthetic system replay prompt limits.
 
 ## [0.1.1] - 2026-05-07
 
