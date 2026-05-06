@@ -19,6 +19,18 @@ for work that has not been published yet.
 ### Fixed
 - None yet.
 
+## [0.1.1] - 2026-05-07
+
+### Added
+- Localized the extension-context `Settings` label for English and Japanese VS Code UI.
+
+### Changed
+- Opening `Settings` from the extension entry in the Extensions view now opens `Manage Provider`.
+- Removed the legacy import-only settings contribution from the extension manifest so the obsolete settings editor is no longer shown for this extension.
+
+### Fixed
+- Avoided sending users from the Marketplace and Extensions view into an outdated legacy settings screen.
+
 ## [0.1.0] - 2026-05-06
 
 ### Added

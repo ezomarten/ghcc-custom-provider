@@ -1,6 +1,6 @@
 {
   "name": "ghcc-custom-provider",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "displayName": "GHCC Custom Provider",
   "description": "Connect GitHub Copilot Chat to OpenAI-compatible and LM Studio endpoints through a custom VS Code language model provider.",
   "publisher": "ezomarten",
@@ -62,6 +62,11 @@
         "title": "GHCC Custom Provider: Manage Provider"
       },
       {
+        "command": "ghccCustomProvider.openExtensionSettings",
+        "title": "%command.openExtensionSettings.title%",
+        "category": "%category.ghccCustomProvider%"
+      },
+      {
         "command": "ghccCustomProvider.showLogs",
         "title": "GHCC Custom Provider: Show Logs"
       },
@@ -78,35 +83,21 @@
         "title": "GHCC Custom Provider: Clear API Key"
       }
     ],
-    "configuration": {
-      "title": "GHCC Custom Provider",
-      "properties": {
-        "ghccCustomProvider.backend.baseUrl": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Legacy import-only setting. The manager UI saves current values into raw extension storage instead of writing to settings.json."
-        },
-        "ghccCustomProvider.backend.defaultModel": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Legacy import-only setting. The manager UI saves current values into raw extension storage instead of writing to settings.json."
-        },
-        "ghccCustomProvider.debugLogging": {
-          "type": "boolean",
-          "default": false,
-          "markdownDescription": "Legacy import-only setting. The manager UI saves current values into raw extension storage instead of writing to settings.json."
-        },
-        "ghccCustomProvider.hiddenStateProbe.enabled": {
-          "type": "boolean",
-          "default": false,
-          "markdownDescription": "Legacy import-only setting. The manager UI saves current values into raw extension storage instead of writing to settings.json."
-        },
-        "ghccCustomProvider.hiddenStateProbe.mimeType": {
-          "type": "string",
-          "default": "application/vnd.ezomarten.ghcc-custom-provider-bridge.hidden-state+json",
-          "markdownDescription": "Legacy import-only setting. The manager UI saves current values into raw extension storage instead of writing to settings.json."
+    "menus": {
+      "extension/context": [
+        {
+          "command": "ghccCustomProvider.openExtensionSettings",
+          "when": "extension == ezomarten.ghcc-custom-provider && extensionStatus == installed",
+          "group": "2_configure",
+          "order": 1
         }
-      }
+      ],
+      "commandPalette": [
+        {
+          "command": "ghccCustomProvider.openExtensionSettings",
+          "when": "false"
+        }
+      ]
     }
   },
   "devDependencies": {

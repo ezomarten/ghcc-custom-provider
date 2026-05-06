@@ -4,7 +4,7 @@
 
 GHCC Custom Provider は、Visual Studio Code の Language Model Chat Provider API を使って、GitHub Copilot Chat を OpenAI 互換エンドポイントや LM Studio に接続する拡張機能です。チャット対応 API を公開しているセルフホスト環境やサードパーティーのバックエンド向けに設計されています。Ollama 互換プロキシではなく、従来のプロキシ方式をそのまま置き換えるものでもありません。
 
-> ステータス: 初版リリース 0.1.0 です。汎用の既定経路は `OpenAI-compatible` です。LM Studio では、ネイティブのモデル情報取得と OpenAI-compatible チャットを組み合わせる `LM Studio` を推奨します。LM Studio のネイティブチャット挙動が必要な場合だけ `LM Studio Native` を選んでください。
+> ステータス: 現行リリースは 0.1.1 です。汎用の既定経路は `OpenAI-compatible` です。LM Studio では、ネイティブのモデル情報取得と OpenAI-compatible チャットを組み合わせる `LM Studio` を推奨します。LM Studio のネイティブチャット挙動が必要な場合だけ `LM Studio Native` を選んでください。
 
 ## 主な機能
 
@@ -37,6 +37,7 @@ GHCC Custom Provider は、Visual Studio Code の Language Model Chat Provider A
 6. 取得できたモデルをチャットで選び、利用を開始します。
 
 モデルが表示されない場合は、モデル選択に出るセットアップ項目が、未設定なのか、接続失敗なのか、チャットモデルが見つからなかったのかを示します。
+拡張機能ビュー上のこの拡張の `Settings` 操作は、従来の設定 UI ではなく `Manage Provider` を開くようになりました。
 
 ## 設定のポイント
 

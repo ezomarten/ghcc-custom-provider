@@ -4,6 +4,7 @@ export const EXTENSION_ID = 'ezomarten.ghcc-custom-provider';
 export const CONFIG_SECTION = 'ghccCustomProvider';
 export const PROVIDER_VENDOR = 'ezomarten-ghccCustomProvider';
 export const MANAGEMENT_COMMAND = 'ghccCustomProvider.manage';
+export const OPEN_EXTENSION_SETTINGS_COMMAND = 'ghccCustomProvider.openExtensionSettings';
 export const SHOW_LOGS_COMMAND = 'ghccCustomProvider.showLogs';
 export const OPEN_RAW_SETTINGS_COMMAND = 'ghccCustomProvider.openRawSettings';
 export const SET_API_KEY_COMMAND = 'ghccCustomProvider.setApiKey';

@@ -11,12 +11,12 @@ npm ci
 npm run package
 ```
 
-This runs TypeScript checking, builds `dist/`, and creates a `.vsix` package such as `ghcc-custom-provider-0.1.0.vsix`.
+This runs TypeScript checking, builds `dist/`, and creates a `.vsix` package such as `ghcc-custom-provider-0.1.1.vsix`.
 
 ## Install a Local Build
 
 ```powershell
-code --install-extension .\ghcc-custom-provider-0.1.0.vsix
+code --install-extension .\ghcc-custom-provider-0.1.1.vsix
 ```
 
 For offline sharing or review builds, distribute only the generated `.vsix` file. Do not share local settings files, logs, `.env` files, or API keys.

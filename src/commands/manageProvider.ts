@@ -7,6 +7,7 @@ import {
   CLEAR_API_KEY_COMMAND,
   HIDDEN_STATE_MIME,
   MANAGEMENT_COMMAND,
+  OPEN_EXTENSION_SETTINGS_COMMAND,
   OPEN_RAW_SETTINGS_COMMAND,
   SET_API_KEY_COMMAND,
   SHOW_LOGS_COMMAND,
@@ -51,6 +52,161 @@ export function registerManagementCommands(
     });
   };
 
+  const showManagementPanel = async (): Promise<void> => {
+    if (panel) {
+      await refreshPanel();
+      panel.reveal(vscode.ViewColumn.One);
+      return;
+    }
+
+    panel = vscode.window.createWebviewPanel(
+      PANEL_VIEW_TYPE,
+      'GHCC Custom Provider',
+      vscode.ViewColumn.One,
+      {
+        enableScripts: true,
+        localResourceRoots: [],
+      },
+    );
+
+    await refreshPanel();
+
+    let messageListener: vscode.Disposable | undefined;
+    panel.onDidDispose(() => {
+      messageListener?.dispose();
+      panel = undefined;
+    });
+
+    messageListener = panel.webview.onDidReceiveMessage(async (message: unknown) => {
+      if (!message || typeof message !== 'object') {
+        return;
+      }
+
+      const command = asString((message as { command?: unknown }).command);
+      if (!command) {
+        return;
+      }
+
+      if (command === 'showLogs') {
+        outputChannel.show(true);
+        return;
+      }
+
+      if (command === 'openRawSettings') {
+        await settingsStore.openRawSettings();
+        return;
+      }
+
+      if (command === 'copyPrompt') {
+        await vscode.env.clipboard.writeText(getSuggestedProbePrompt());
+        void vscode.window.showInformationMessage('Probe prompt copied to the clipboard.');
+        return;
+      }
+
+      if (command === 'showError') {
+        const text = asString((message as { text?: unknown }).text);
+        if (text) {
+          void vscode.window.showErrorMessage(text);
+        }
+        return;
+      }
+
+      if (command === 'testEndpointConnection') {
+        if ((message as { userInitiated?: unknown }).userInitiated !== true) {
+          outputChannel.warn('Ignored connection test request without explicit user initiation.');
+          return;
+        }
+
+        const request = sanitizeConnectionTestRequest(message);
+        if (!request) {
+          return;
+        }
+
+        await refreshEndpointModelCache(
+          request,
+          'manual',
+          settingsStore,
+          outputChannel,
+          connectionStatusStore,
+          modelCacheStore,
+        );
+
+        return;
+      }
+
+      if (command === 'requestRemoveEndpoint') {
+        const endpointId = asString((message as { endpointId?: unknown }).endpointId);
+        if (!endpointId) {
+          return;
+        }
+
+        const endpointName = asString((message as { endpointName?: unknown }).endpointName);
+        const isActive = (message as { isActive?: unknown }).isActive === true;
+        const confirmed = await confirmEndpointRemoval(settingsStore, endpointId, endpointName, isActive);
+        if (panel) {
+          void panel.webview.postMessage({
+            command: 'removeEndpointConfirmationResult',
+            endpointId,
+            confirmed,
+          });
+        }
+        return;
+      }
+
+      if (command === 'saveSettings') {
+        const requestId = (message as { requestId?: unknown }).requestId;
+        const refreshAfterSave = (message as { refreshAfterSave?: unknown }).refreshAfterSave === true;
+        try {
+          const payload = sanitizeSettingsPayload((message as { settings?: unknown }).settings);
+          await settingsStore.saveSettings(payload);
+          if (refreshAfterSave) {
+            await refreshPanel();
+          } else if (panel) {
+            void panel.webview.postMessage({
+              command: 'saveResult',
+              requestId,
+              ok: true,
+            });
+          }
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : `Failed to save settings: ${String(error)}`;
+          if (panel) {
+            void panel.webview.postMessage({
+              command: 'saveResult',
+              requestId,
+              ok: false,
+              error: errorMessage,
+            });
+          } else {
+            void vscode.window.showErrorMessage(errorMessage);
+          }
+        }
+        return;
+      }
+
+      if (command === 'setApiKey') {
+        const endpointId = asString((message as { endpointId?: unknown }).endpointId);
+        const endpointName = asString((message as { endpointName?: unknown }).endpointName);
+        const didUpdate = await settingsStore.promptForApiKey(endpointId, endpointName);
+        if (didUpdate) {
+          postApiKeyStatusChange(endpointId, true);
+          void vscode.window.showInformationMessage('GHCC Custom Provider API key was stored in secret storage.');
+        }
+        return;
+      }
+
+      if (command === 'clearApiKey') {
+        const endpointId = asString((message as { endpointId?: unknown }).endpointId);
+        const endpointName = asString((message as { endpointName?: unknown }).endpointName);
+        const didClear = await settingsStore.clearApiKey(endpointId, endpointName);
+        if (didClear) {
+          postApiKeyStatusChange(endpointId, false);
+          void vscode.window.showInformationMessage('GHCC Custom Provider API key was cleared from secret storage.');
+        }
+      }
+    });
+  };
+
   context.subscriptions.push(
     connectionStatusStore.onDidChange((event) => {
       if (!panel) {
@@ -66,160 +222,11 @@ export function registerManagementCommands(
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand(MANAGEMENT_COMMAND, async () => {
-      if (panel) {
-        await refreshPanel();
-        panel.reveal(vscode.ViewColumn.One);
-        return;
-      }
+    vscode.commands.registerCommand(MANAGEMENT_COMMAND, showManagementPanel),
+  );
 
-      panel = vscode.window.createWebviewPanel(
-        PANEL_VIEW_TYPE,
-        'GHCC Custom Provider',
-        vscode.ViewColumn.One,
-        {
-          enableScripts: true,
-          localResourceRoots: [],
-        },
-      );
-
-      await refreshPanel();
-
-      let messageListener: vscode.Disposable | undefined;
-      panel.onDidDispose(() => {
-        messageListener?.dispose();
-        panel = undefined;
-      });
-
-      messageListener = panel.webview.onDidReceiveMessage(async (message: unknown) => {
-        if (!message || typeof message !== 'object') {
-          return;
-        }
-
-        const command = asString((message as { command?: unknown }).command);
-        if (!command) {
-          return;
-        }
-
-        if (command === 'showLogs') {
-          outputChannel.show(true);
-          return;
-        }
-
-        if (command === 'openRawSettings') {
-          await settingsStore.openRawSettings();
-          return;
-        }
-
-        if (command === 'copyPrompt') {
-          await vscode.env.clipboard.writeText(getSuggestedProbePrompt());
-          void vscode.window.showInformationMessage('Probe prompt copied to the clipboard.');
-          return;
-        }
-
-        if (command === 'showError') {
-          const text = asString((message as { text?: unknown }).text);
-          if (text) {
-            void vscode.window.showErrorMessage(text);
-          }
-          return;
-        }
-
-        if (command === 'testEndpointConnection') {
-          if ((message as { userInitiated?: unknown }).userInitiated !== true) {
-            outputChannel.warn('Ignored connection test request without explicit user initiation.');
-            return;
-          }
-
-          const request = sanitizeConnectionTestRequest(message);
-          if (!request) {
-            return;
-          }
-
-          await refreshEndpointModelCache(
-            request,
-            'manual',
-            settingsStore,
-            outputChannel,
-            connectionStatusStore,
-            modelCacheStore,
-          );
-
-          return;
-        }
-
-        if (command === 'requestRemoveEndpoint') {
-          const endpointId = asString((message as { endpointId?: unknown }).endpointId);
-          if (!endpointId) {
-            return;
-          }
-
-          const endpointName = asString((message as { endpointName?: unknown }).endpointName);
-          const isActive = (message as { isActive?: unknown }).isActive === true;
-          const confirmed = await confirmEndpointRemoval(settingsStore, endpointId, endpointName, isActive);
-          if (panel) {
-            void panel.webview.postMessage({
-              command: 'removeEndpointConfirmationResult',
-              endpointId,
-              confirmed,
-            });
-          }
-          return;
-        }
-
-        if (command === 'saveSettings') {
-          const requestId = (message as { requestId?: unknown }).requestId;
-          const refreshAfterSave = (message as { refreshAfterSave?: unknown }).refreshAfterSave === true;
-          try {
-            const payload = sanitizeSettingsPayload((message as { settings?: unknown }).settings);
-            await settingsStore.saveSettings(payload);
-            if (refreshAfterSave) {
-              await refreshPanel();
-            } else if (panel) {
-              void panel.webview.postMessage({
-                command: 'saveResult',
-                requestId,
-                ok: true,
-              });
-            }
-          } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : `Failed to save settings: ${String(error)}`;
-            if (panel) {
-              void panel.webview.postMessage({
-                command: 'saveResult',
-                requestId,
-                ok: false,
-                error: errorMessage,
-              });
-            } else {
-              void vscode.window.showErrorMessage(errorMessage);
-            }
-          }
-          return;
-        }
-
-        if (command === 'setApiKey') {
-          const endpointId = asString((message as { endpointId?: unknown }).endpointId);
-          const endpointName = asString((message as { endpointName?: unknown }).endpointName);
-          const didUpdate = await settingsStore.promptForApiKey(endpointId, endpointName);
-          if (didUpdate) {
-            postApiKeyStatusChange(endpointId, true);
-            void vscode.window.showInformationMessage('GHCC Custom Provider API key was stored in secret storage.');
-          }
-          return;
-        }
-
-        if (command === 'clearApiKey') {
-          const endpointId = asString((message as { endpointId?: unknown }).endpointId);
-          const endpointName = asString((message as { endpointName?: unknown }).endpointName);
-          const didClear = await settingsStore.clearApiKey(endpointId, endpointName);
-          if (didClear) {
-            postApiKeyStatusChange(endpointId, false);
-            void vscode.window.showInformationMessage('GHCC Custom Provider API key was cleared from secret storage.');
-          }
-        }
-      });
-    }),
+  context.subscriptions.push(
+    vscode.commands.registerCommand(OPEN_EXTENSION_SETTINGS_COMMAND, showManagementPanel),
   );
 
   context.subscriptions.push(

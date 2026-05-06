@@ -4,7 +4,7 @@ English README. A Japanese version is also included as [README.ja.md](README.ja.
 
 GHCC Custom Provider connects GitHub Copilot Chat to OpenAI-compatible endpoints and LM Studio through Visual Studio Code's Language Model Chat Provider API. It is designed for self-hosted or third-party backends that already expose chat-capable APIs. It is not an Ollama-compatible proxy and it is not a drop-in replacement for older proxy-based setups.
 
-> Status: Initial release 0.1.0. `OpenAI-compatible` is the broad default. Use `LM Studio` for LM Studio servers when you want native model metadata with OpenAI-compatible chat behavior. Use `LM Studio Native` only when you specifically want LM Studio's native chat behavior.
+> Status: Current release 0.1.1. `OpenAI-compatible` is the broad default. Use `LM Studio` for LM Studio servers when you want native model metadata with OpenAI-compatible chat behavior. Use `LM Studio Native` only when you specifically want LM Studio's native chat behavior.
 
 ## Features
 
@@ -37,6 +37,7 @@ GHCC Custom Provider connects GitHub Copilot Chat to OpenAI-compatible endpoints
 6. Select one of the discovered models in chat and start chatting.
 
 If no models are available, the setup entry in the model picker explains whether setup is missing, the connection failed, or the endpoint returned no chat models.
+From the extension entry in the Extensions view, the `Settings` action now opens `Manage Provider` instead of the legacy settings UI.
 
 ## Configuration Highlights
 
