@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 
-export const EXTENSION_ID = 'ezomarten.vscode-ghcc-custom-provider-bridge';
+export const EXTENSION_ID = 'ezomarten.ghcc-custom-provider';
 export const CONFIG_SECTION = 'ghccCustomProvider';
 export const PROVIDER_VENDOR = 'ezomarten-ghccCustomProvider';
 export const MANAGEMENT_COMMAND = 'ghccCustomProvider.manage';

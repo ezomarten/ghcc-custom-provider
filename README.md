@@ -24,7 +24,7 @@ GHCC Custom Provider connects GitHub Copilot Chat to OpenAI-compatible endpoints
 
 ## Installation
 
-- Install from the [Visual Studio Code Marketplace](https://marketplace.visualstudio.com/items?itemName=ezomarten.vscode-ghcc-custom-provider-bridge).
+- Install from the [Visual Studio Code Marketplace](https://marketplace.visualstudio.com/items?itemName=ezomarten.ghcc-custom-provider).
 - For offline installs or pinned validation builds, install a provided `.vsix` package.
 
 ## Quick Start

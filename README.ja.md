@@ -24,7 +24,7 @@ GHCC Custom Provider は、Visual Studio Code の Language Model Chat Provider A
 
 ## インストール
 
-- [Visual Studio Code Marketplace](https://marketplace.visualstudio.com/items?itemName=ezomarten.vscode-ghcc-custom-provider-bridge) からインストールできます。
+- [Visual Studio Code Marketplace](https://marketplace.visualstudio.com/items?itemName=ezomarten.ghcc-custom-provider) からインストールできます。
 - オフライン導入や版固定の検証には `.vsix` パッケージを利用できます。
 
 ## クイックスタート

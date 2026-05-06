@@ -11,12 +11,12 @@ npm ci
 npm run package
 ```
 
-This runs TypeScript checking, builds `dist/`, and creates a `.vsix` package such as `vscode-ghcc-custom-provider-bridge-0.1.0.vsix`.
+This runs TypeScript checking, builds `dist/`, and creates a `.vsix` package such as `ghcc-custom-provider-0.1.0.vsix`.
 
 ## Install a Local Build
 
 ```powershell
-code --install-extension .\vscode-ghcc-custom-provider-bridge-0.1.0.vsix
+code --install-extension .\ghcc-custom-provider-0.1.0.vsix
 ```
 
 For offline sharing or review builds, distribute only the generated `.vsix` file. Do not share local settings files, logs, `.env` files, or API keys.
@@ -34,7 +34,7 @@ npm run package
 
 Before packaging a public release, rename the `Unreleased` section in `CHANGELOG.md` to the release version and date, then create a new empty `Unreleased` section with `Added`, `Changed`, and `Fixed` headings for future work.
 
-Keep the `publisher`, `repository`, `homepage`, and `bugs` fields in `package.json` aligned with the live GitHub repository and Marketplace identity.
+Keep the `name`, `publisher`, `repository`, `homepage`, and `bugs` fields in `package.json` aligned with the live GitHub repository and Marketplace identity.
 
 Review the packaged file list before publishing.
 

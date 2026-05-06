@@ -27,7 +27,7 @@ for work that has not been published yet.
 - Endpoint manager UI with raw-storage persistence, SecretStorage API keys, connection testing, and model overrides.
 
 ### Changed
-- Published the extension under the ezomarten publisher and release metadata.
+- Published the extension under the ezomarten publisher and the `ghcc-custom-provider` package name.
 
 ### Fixed
 - None.

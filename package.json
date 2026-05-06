@@ -1,5 +1,5 @@
 {
-  "name": "vscode-ghcc-custom-provider-bridge",
+  "name": "ghcc-custom-provider",
   "version": "0.1.0",
   "displayName": "GHCC Custom Provider",
   "description": "Connect GitHub Copilot Chat to OpenAI-compatible and LM Studio endpoints through a custom VS Code language model provider.",
@@ -7,11 +7,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/ezomarten/vscode-ghcc-custom-provider-bridge.git"
+    "url": "https://github.com/ezomarten/ghcc-custom-provider.git"
   },
-  "homepage": "https://github.com/ezomarten/vscode-ghcc-custom-provider-bridge#readme",
+  "homepage": "https://github.com/ezomarten/ghcc-custom-provider#readme",
   "bugs": {
-    "url": "https://github.com/ezomarten/vscode-ghcc-custom-provider-bridge/issues"
+    "url": "https://github.com/ezomarten/ghcc-custom-provider/issues"
   },
   "packageManager": "npm@11.6.2",
   "engines": {
