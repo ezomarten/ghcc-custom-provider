@@ -1,0 +1,118 @@
+{
+  "name": "vscode-ghcc-custom-provider-bridge",
+  "version": "0.1.0",
+  "displayName": "GHCC Custom Provider",
+  "description": "Connect GitHub Copilot Chat to OpenAI-compatible and LM Studio endpoints through a custom VS Code language model provider.",
+  "publisher": "ezomarten",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ezomarten/vscode-ghcc-custom-provider-bridge.git"
+  },
+  "homepage": "https://github.com/ezomarten/vscode-ghcc-custom-provider-bridge#readme",
+  "bugs": {
+    "url": "https://github.com/ezomarten/vscode-ghcc-custom-provider-bridge/issues"
+  },
+  "packageManager": "npm@11.6.2",
+  "engines": {
+    "vscode": "^1.118.0",
+    "node": ">=22.14.0"
+  },
+  "categories": [
+    "AI",
+    "Other"
+  ],
+  "keywords": [
+    "github-copilot",
+    "copilot-chat",
+    "language-model-provider",
+    "llm",
+    "self-hosted",
+    "local-ai",
+    "lm-studio",
+    "openai-compatible",
+    "openai-api",
+    "vscode-chat"
+  ],
+  "main": "./dist/extension.js",
+  "extensionKind": [
+    "ui",
+    "workspace"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "scripts": {
+    "build": "tsc -p .",
+    "check": "tsc -p . --noEmit",
+    "package": "npm run check && npm run build && vsce package",
+    "watch": "tsc -w -p ."
+  },
+  "contributes": {
+    "languageModelChatProviders": [
+      {
+        "vendor": "ezomarten-ghccCustomProvider",
+        "displayName": "GHCC Custom Provider",
+        "managementCommand": "ghccCustomProvider.manage"
+      }
+    ],
+    "commands": [
+      {
+        "command": "ghccCustomProvider.manage",
+        "title": "GHCC Custom Provider: Manage Provider"
+      },
+      {
+        "command": "ghccCustomProvider.showLogs",
+        "title": "GHCC Custom Provider: Show Logs"
+      },
+      {
+        "command": "ghccCustomProvider.openRawSettings",
+        "title": "GHCC Custom Provider: Open Raw Settings"
+      },
+      {
+        "command": "ghccCustomProvider.setApiKey",
+        "title": "GHCC Custom Provider: Set API Key"
+      },
+      {
+        "command": "ghccCustomProvider.clearApiKey",
+        "title": "GHCC Custom Provider: Clear API Key"
+      }
+    ],
+    "configuration": {
+      "title": "GHCC Custom Provider",
+      "properties": {
+        "ghccCustomProvider.backend.baseUrl": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Legacy import-only setting. The manager UI saves current values into raw extension storage instead of writing to settings.json."
+        },
+        "ghccCustomProvider.backend.defaultModel": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Legacy import-only setting. The manager UI saves current values into raw extension storage instead of writing to settings.json."
+        },
+        "ghccCustomProvider.debugLogging": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Legacy import-only setting. The manager UI saves current values into raw extension storage instead of writing to settings.json."
+        },
+        "ghccCustomProvider.hiddenStateProbe.enabled": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Legacy import-only setting. The manager UI saves current values into raw extension storage instead of writing to settings.json."
+        },
+        "ghccCustomProvider.hiddenStateProbe.mimeType": {
+          "type": "string",
+          "default": "application/vnd.ezomarten.ghcc-custom-provider-bridge.hidden-state+json",
+          "markdownDescription": "Legacy import-only setting. The manager UI saves current values into raw extension storage instead of writing to settings.json."
+        }
+      }
+    }
+  },
+  "devDependencies": {
+    "@types/node": "22.19.17",
+    "@types/vscode": "1.118.0",
+    "@vscode/vsce": "3.9.1",
+    "typescript": "5.9.3"
+  }
+}
