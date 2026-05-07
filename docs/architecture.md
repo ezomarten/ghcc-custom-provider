@@ -117,7 +117,7 @@ Because Copilot-side agent budgeting still appears to happen before the provider
 
 ## Persistence strategy
 
-- raw non-secret settings file: `provider-settings.json` under workspace or global extension storage
+- raw non-secret settings file: `provider-settings.json` under global extension storage, shared across windows for the same VS Code user profile and extension host kind
 - raw file shape: multiple `endpoints` plus `activeEndpointIds` and `activeEndpointId`, with `backend` preserved as the primary enabled-endpoint alias for runtime consumers
 - secret value: SecretStorage entries keyed per endpoint id
 - legacy configuration values under `ghccCustomProvider.*`: import source only, not the write target

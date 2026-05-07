@@ -1,6 +1,6 @@
 {
   "name": "ghcc-custom-provider",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "displayName": "GHCC Custom Provider",
   "description": "Connect GitHub Copilot Chat to OpenAI-compatible and LM Studio endpoints through a custom VS Code language model provider.",
   "publisher": "ezomarten",

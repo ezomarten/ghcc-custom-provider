@@ -158,7 +158,11 @@ export function registerManagementCommands(
         const refreshAfterSave = (message as { refreshAfterSave?: unknown }).refreshAfterSave === true;
         try {
           const payload = sanitizeSettingsPayload((message as { settings?: unknown }).settings);
-          await settingsStore.saveSettings(payload);
+          const expectedStorageRevision = (message as { storageRevision?: unknown }).storageRevision;
+          const saved = await settingsStore.saveSettings(
+            payload,
+            typeof expectedStorageRevision === 'string' ? expectedStorageRevision : null,
+          );
           if (refreshAfterSave) {
             await refreshPanel();
           } else if (panel) {
@@ -166,6 +170,7 @@ export function registerManagementCommands(
               command: 'saveResult',
               requestId,
               ok: true,
+              storageRevision: saved.revision,
             });
           }
         } catch (error) {
@@ -579,6 +584,8 @@ function buildWebviewState(
     storagePath: viewState.storageFileUri?.fsPath || '<storage unavailable>',
     source: viewState.source,
     storageExists: viewState.storageExists,
+    storageRevision: viewState.storageRevision,
+    storageReadError: viewState.storageReadError || '',
     probePrompt: getSuggestedProbePrompt(),
     locale,
     text,
@@ -1054,13 +1061,16 @@ const state = {
   selectedView: persistedUiState.selectedView === 'common' ? 'common' : 'endpoint',
   selectedEndpointId: persistedUiState.selectedEndpointId || initialState.settings.activeEndpointId,
   storedApiKeyEndpointIds: new Set(initialState.storedApiKeyEndpointIds || []),
+  storageRevision: initialState.storageRevision === null || typeof initialState.storageRevision === 'string'
+    ? initialState.storageRevision
+    : null,
   customBodyTexts: {},
   modelOverridesTexts: {},
   defaultModelOverrideDrafts: {},
   nextSaveRequestId: 0,
   lastHandledSaveRequestId: 0,
-  saveStatusKind: 'idle',
-  saveStatusDetail: '',
+  saveStatusKind: initialState.storageReadError ? 'error' : 'idle',
+  saveStatusDetail: initialState.storageReadError ? String(initialState.storageReadError) : '',
 };
 
 state.settings.activeEndpointIds = normalizeActiveEndpointIds(state.settings.activeEndpointIds, state.settings.activeEndpointId);
@@ -1574,6 +1584,7 @@ function attachHostMessageHandlers() {
 
       state.lastHandledSaveRequestId = requestId;
       if (message.ok === true) {
+        state.storageRevision = typeof message.storageRevision === 'string' ? message.storageRevision : state.storageRevision;
         setSaveStatus('saved');
       } else {
         const detail = typeof message.error === 'string' ? message.error : '';
@@ -2170,6 +2181,7 @@ function requestImmediateSave(refreshAfterSave = false) {
     vscode.postMessage({
       command: 'saveSettings',
       settings: payload,
+      storageRevision: state.storageRevision,
       requestId,
       refreshAfterSave,
     });

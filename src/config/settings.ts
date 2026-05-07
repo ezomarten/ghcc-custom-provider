@@ -118,6 +118,8 @@ export interface BridgeSettingsViewState {
   storedApiKeyEndpointIds: string[];
   storageExists: boolean;
   storageFileUri: vscode.Uri | null;
+  storageRevision: string | null;
+  storageReadError?: string;
   source: 'storage' | 'defaults' | 'legacy-configuration';
 }
 

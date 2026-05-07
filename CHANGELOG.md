@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Add an [Unreleased] section only while unpublished changes exist. Remove it again when shipping a release if nothing remains unreleased.
 
+## [0.1.3] - 2026-05-07
+
+### Changed
+- Store endpoint settings in global extension storage so they are shared across windows for the same VS Code user profile, with one-time migration from the previous workspace-scoped raw settings file.
+- Clarified that preserved hidden reasoning keeps the tail when capped, while synthetic replay keeps the beginning and end.
+
 ## [0.1.2] - 2026-05-07
 
 ### Added

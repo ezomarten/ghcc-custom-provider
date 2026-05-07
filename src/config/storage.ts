@@ -1,4 +1,6 @@
 import { Buffer } from 'node:buffer';
+import { createHash, randomBytes } from 'node:crypto';
+import { promises as nodeFs } from 'node:fs';
 
 import * as vscode from 'vscode';
 
@@ -23,7 +25,14 @@ import {
 interface StoredSettingsFileData {
   fileUri: vscode.Uri | null;
   exists: boolean;
+  revision: string | null;
+  readError?: string;
   settings: BridgeStoredSettings;
+}
+
+interface SavedSettingsFileData {
+  fileUri: vscode.Uri;
+  revision: string;
 }
 
 interface LoadedSettings extends StoredSettingsFileData {
@@ -70,18 +79,38 @@ export class BridgeSettingsStore {
       storedApiKeyEndpointIds,
       storageExists: loaded.exists,
       storageFileUri: loaded.fileUri,
+      storageRevision: loaded.revision,
+      storageReadError: loaded.readError,
       source: loaded.source,
     };
   }
 
-  async saveSettings(nextSettings: BridgeStoredSettings): Promise<vscode.Uri> {
-    const previousSettings = await this.getSettings();
+  async saveSettings(
+    nextSettings: BridgeStoredSettings,
+    expectedStorageRevision?: string | null,
+  ): Promise<SavedSettingsFileData> {
     const sanitized = sanitizeStoredSettings(nextSettings);
     assertUniqueEndpointNames(sanitized.endpoints);
-    const fileUri = await writeSettingsToStorageFile(this.context, sanitized);
-    this.outputChannel.info(`Saved GHCC Custom Provider settings to ${fileUri.fsPath}.`);
+
+    const previousSettings = await this.getSettings();
+    const saved = await withSettingsStorageLock(this.context, async () => {
+      const current = await readSettingsFromStorageFile(this.context, this.outputChannel);
+      if (current.readError) {
+        throw new Error(
+          `The GHCC Custom Provider settings file is not valid JSON. Open the raw settings file and repair it before saving from the manager: ${current.readError}`,
+        );
+      }
+
+      if (expectedStorageRevision !== undefined && current.revision !== expectedStorageRevision) {
+        throw new Error('The GHCC Custom Provider settings file changed in another VS Code window. Reopen the manager and apply your changes again.');
+      }
+
+      return writeSettingsToStorageFile(this.context, sanitized);
+    });
+
+    this.outputChannel.info(`Saved GHCC Custom Provider settings to ${saved.fileUri.fsPath}.`);
     this.changeEmitter.fire(createSettingsSavedChangeEvent(previousSettings, sanitized));
-    return fileUri;
+    return saved;
   }
 
   async getApiKey(endpointId?: string): Promise<string | undefined> {
@@ -99,7 +128,7 @@ export class BridgeSettingsStore {
     const loaded = await this.loadSettings();
     const fileUri = loaded.exists && loaded.fileUri
       ? loaded.fileUri
-      : await writeSettingsToStorageFile(this.context, loaded.settings);
+      : (await writeSettingsToStorageFile(this.context, loaded.settings)).fileUri;
 
     const document = await vscode.workspace.openTextDocument(fileUri);
     await vscode.window.showTextDocument(document, {
@@ -193,12 +222,24 @@ export class BridgeSettingsStore {
       return;
     }
 
+    const workspaceStored = await readSettingsFromStorageFileUri(
+      getWorkspaceSettingsStorageFileUri(this.context),
+      this.outputChannel,
+    );
+    if (workspaceStored.exists && !workspaceStored.readError) {
+      const { fileUri } = await writeSettingsToStorageFile(this.context, workspaceStored.settings);
+      this.outputChannel.info(
+        `Imported workspace-scoped GHCC Custom Provider settings into global raw storage at ${fileUri.fsPath}. Future windows will share the same endpoint settings.`,
+      );
+      return;
+    }
+
     const legacy = readLegacySettingsFromConfiguration();
     if (!legacy.isConfigured) {
       return;
     }
 
-    const fileUri = await writeSettingsToStorageFile(this.context, legacy.settings);
+    const { fileUri } = await writeSettingsToStorageFile(this.context, legacy.settings);
     this.outputChannel.info(
       `Imported legacy ${CONFIG_SECTION} settings into raw storage at ${fileUri.fsPath}. Future edits will no longer rely on settings.json writes.`,
     );
@@ -392,7 +433,11 @@ function areSameOrderedEndpointIds(left: readonly string[], right: readonly stri
 }
 
 function getSettingsStorageBaseUri(context: vscode.ExtensionContext): vscode.Uri | null {
-  return (vscode.workspace.workspaceFolders?.length ? context.storageUri : context.globalStorageUri) ?? null;
+  return context.globalStorageUri ?? null;
+}
+
+function getWorkspaceSettingsStorageFileUri(context: vscode.ExtensionContext): vscode.Uri | null {
+  return context.storageUri ? vscode.Uri.joinPath(context.storageUri, SETTINGS_STORAGE_FILE_NAME) : null;
 }
 
 function getSettingsStorageFileUri(context: vscode.ExtensionContext): vscode.Uri | null {
@@ -423,11 +468,18 @@ async function readSettingsFromStorageFile(
   context: vscode.ExtensionContext,
   outputChannel?: vscode.LogOutputChannel,
 ): Promise<StoredSettingsFileData> {
-  const fileUri = getSettingsStorageFileUri(context);
+  return readSettingsFromStorageFileUri(getSettingsStorageFileUri(context), outputChannel);
+}
+
+async function readSettingsFromStorageFileUri(
+  fileUri: vscode.Uri | null,
+  outputChannel?: vscode.LogOutputChannel,
+): Promise<StoredSettingsFileData> {
   if (!fileUri) {
     return {
       fileUri: null,
       exists: false,
+      revision: null,
       settings: cloneDefaultBridgeSettings(),
     };
   }
@@ -439,6 +491,7 @@ async function readSettingsFromStorageFile(
     return {
       fileUri,
       exists: true,
+      revision: createStorageRevision(raw),
       settings: sanitizeStoredSettings(parsed),
     };
   } catch (error) {
@@ -446,6 +499,7 @@ async function readSettingsFromStorageFile(
       return {
         fileUri,
         exists: false,
+        revision: null,
         settings: cloneDefaultBridgeSettings(),
       };
     }
@@ -457,6 +511,8 @@ async function readSettingsFromStorageFile(
       return {
         fileUri,
         exists: true,
+        revision: null,
+        readError: error.message,
         settings: cloneDefaultBridgeSettings(),
       };
     }
@@ -468,18 +524,112 @@ async function readSettingsFromStorageFile(
 async function writeSettingsToStorageFile(
   context: vscode.ExtensionContext,
   settings: BridgeStoredSettings,
-): Promise<vscode.Uri> {
+): Promise<SavedSettingsFileData> {
   const baseUri = await ensureStorageDirectory(context);
   if (!baseUri) {
     throw new Error('Raw settings storage is not available in the current VS Code environment.');
   }
 
   const fileUri = vscode.Uri.joinPath(baseUri, SETTINGS_STORAGE_FILE_NAME);
+  const tempUri = vscode.Uri.joinPath(baseUri, `${SETTINGS_STORAGE_FILE_NAME}.${process.pid}.${Date.now()}.${randomBytes(6).toString('hex')}.tmp`);
   const content = `${JSON.stringify(settings, null, 2)}\n`;
-  await vscode.workspace.fs.writeFile(fileUri, Buffer.from(content, 'utf8'));
-  return fileUri;
+  await vscode.workspace.fs.writeFile(tempUri, Buffer.from(content, 'utf8'));
+  try {
+    await vscode.workspace.fs.rename(tempUri, fileUri, { overwrite: true });
+  } catch (error) {
+    await deleteFileIfExists(tempUri);
+    throw error;
+  }
+
+  return {
+    fileUri,
+    revision: createStorageRevision(content),
+  };
+}
+
+async function withSettingsStorageLock<T>(context: vscode.ExtensionContext, action: () => Promise<T>): Promise<T> {
+  const baseUri = await ensureStorageDirectory(context);
+  if (!baseUri || baseUri.scheme !== 'file') {
+    return action();
+  }
+
+  const lockUri = vscode.Uri.joinPath(baseUri, `${SETTINGS_STORAGE_FILE_NAME}.lock`);
+  const lockPath = lockUri.fsPath;
+  let handle: nodeFs.FileHandle | undefined;
+
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    try {
+      handle = await nodeFs.open(lockPath, 'wx');
+      await handle.writeFile(String(process.pid));
+      break;
+    } catch (error) {
+      if (!isFileAlreadyExistsError(error)) {
+        throw error;
+      }
+
+      await deleteStaleLockFile(lockPath);
+      await delay(50 + Math.min(attempt, 10) * 25);
+    }
+  }
+
+  if (!handle) {
+    throw new Error('Timed out waiting for exclusive access to the GHCC Custom Provider settings file. Try saving again.');
+  }
+
+  try {
+    return await action();
+  } finally {
+    await handle.close();
+    await deleteNodeFileIfExists(lockPath);
+  }
+}
+
+function createStorageRevision(content: Uint8Array | string): string {
+  return createHash('sha256').update(content).digest('hex');
+}
+
+async function deleteFileIfExists(fileUri: vscode.Uri): Promise<void> {
+  try {
+    await vscode.workspace.fs.delete(fileUri);
+  } catch (error) {
+    if (!isFileNotFoundError(error)) {
+      throw error;
+    }
+  }
+}
+
+async function deleteStaleLockFile(lockPath: string): Promise<void> {
+  try {
+    const stat = await nodeFs.stat(lockPath);
+    if (Date.now() - stat.mtimeMs > 30_000) {
+      await deleteNodeFileIfExists(lockPath);
+    }
+  } catch (error) {
+    if (!isFileNotFoundError(error)) {
+      throw error;
+    }
+  }
+}
+
+async function deleteNodeFileIfExists(filePath: string): Promise<void> {
+  try {
+    await nodeFs.unlink(filePath);
+  } catch (error) {
+    if (!isFileNotFoundError(error)) {
+      throw error;
+    }
+  }
+}
+
+function isFileAlreadyExistsError(error: unknown): boolean {
+  return Boolean((error as { code?: unknown } | undefined)?.code === 'EEXIST');
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function isFileNotFoundError(error: unknown): boolean {
-  return Boolean((error as { code?: unknown } | undefined)?.code === 'FileNotFound' || /file not found/i.test(String((error as { message?: unknown } | undefined)?.message ?? '')));
+  const code = (error as { code?: unknown } | undefined)?.code;
+  return Boolean(code === 'FileNotFound' || code === 'ENOENT' || /file not found/i.test(String((error as { message?: unknown } | undefined)?.message ?? '')));
 }

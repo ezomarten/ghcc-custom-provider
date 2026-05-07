@@ -43,8 +43,8 @@ From the extension entry in the Extensions view, the `Settings` action now opens
 
 - `Send tools to endpoint`: Set this to `Off` for reasoning-first or local models that should not receive VS Code tool definitions.
 - `Tool limit`: Optionally advertise and forward fewer tools to reduce tool volume.
-- `Preserved thinking limit`: Caps hidden thinking stored or replayed as `reasoning_content`. Blank uses `64000` characters. Set `0` to keep continuation IDs such as LM Studio Native response IDs while dropping reasoning text. `-1` removes the cap, which is not recommended.
-- `Synthetic replay limit`: Caps hidden thinking injected into synthetic system replay prompts. Blank uses `12000` characters. Set `0` to disable synthetic replay. `-1` removes the cap, which is not recommended.
+- `Preserved thinking limit`: Caps hidden thinking stored or replayed as `reasoning_content`; when truncated, the tail is kept because it is usually closest to the final conclusion. Blank uses `64000` characters. Set `0` to keep continuation IDs such as LM Studio Native response IDs while dropping reasoning text. `-1` removes the cap, which is not recommended.
+- `Synthetic replay limit`: Caps hidden thinking injected into synthetic system replay prompts; when truncated, the beginning and end are kept with the middle omitted. Blank uses `12000` characters. Set `0` to disable synthetic replay. `-1` removes the cap, which is not recommended.
 - `Model Picker`: Backend models can be shown in the model picker by default. Even when this is turned off, the setup entry stays visible while no enabled endpoint is available so the manager is still easy to reopen.
 - `Common Settings`: Turn on the Probe model, debug logging, or conversation memory persistence when troubleshooting.
 - `Model Overrides`: Use simple default overrides for tool support, image support, and token limits across all models, or keep using advanced JSON for per-model tuning.
@@ -59,7 +59,7 @@ Additional maintenance commands are available for API keys and raw settings when
 ## Privacy and Storage
 
 - API keys are stored in VS Code SecretStorage.
-- Non-secret settings are stored in the extension's storage area instead of `settings.json`.
+- Non-secret endpoint settings are stored in the extension's global storage area instead of `settings.json`, so they are shared across windows for the same VS Code user profile.
 - Requests are sent only to the endpoint that you configure.
 - The extension does not add its own telemetry to chat requests.
 - Diagnostic logs avoid API keys, raw chat content, and backend conversation ids.

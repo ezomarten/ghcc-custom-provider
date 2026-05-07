@@ -43,8 +43,8 @@ GHCC Custom Provider は、Visual Studio Code の Language Model Chat Provider A
 
 - `Send tools to endpoint`: 推論優先のローカルモデルや、VS Code のツール定義を渡したくない接続先では `Off` にします。
 - `Tool limit`: 広告するツール数と転送するツール数を減らしたいときに使います。
-- `Preserved thinking limit`: `reasoning_content` として保存または再送する hidden thinking の上限です。未入力時は `64000` 文字までです。`0` にすると LM Studio Native の response ID などは残しつつ推論本文を破棄できます。`-1` は無制限ですが非推奨です。
-- `Synthetic replay limit`: 合成 system replay prompt に入れる hidden thinking の上限です。未入力時は `12000` 文字までです。`0` にすると合成 replay を無効化できます。`-1` は無制限ですが非推奨です。
+- `Preserved thinking limit`: `reasoning_content` として保存または再送する hidden thinking の上限です。超過時は、結論に近いことが多い末尾を残します。未入力時は `64000` 文字までです。`0` にすると LM Studio Native の response ID などは残しつつ推論本文を破棄できます。`-1` は無制限ですが非推奨です。
+- `Synthetic replay limit`: 合成 system replay prompt に入れる hidden thinking の上限です。超過時は先頭と末尾を残し、中間を省略します。未入力時は `12000` 文字までです。`0` にすると合成 replay を無効化できます。`-1` は無制限ですが非推奨です。
 - `Model Picker`: バックエンドモデルをモデルピッカーへ既定で表示できます。これを Off にしても、接続先が未設定・未接続の間は setup 項目を表示し続けるため、管理画面は開き直しやすいままです。
 - `Common Settings`: 問題切り分け時に Probe モデル、詳細ログ、会話メモリの永続化を有効にできます。
 - `Model Overrides`: 全モデル向けのツール対応、画像対応、トークン上限は簡易欄でまとめて上書きでき、必要なら従来どおり詳細JSONでモデルごとの調整もできます。
@@ -59,7 +59,7 @@ GHCC Custom Provider は、Visual Studio Code の Language Model Chat Provider A
 ## プライバシーと保存先
 
 - API キーは VS Code SecretStorage に保存されます。
-- 非機密の設定は `settings.json` ではなく、拡張機能用の保存領域に保存されます。
+- 非機密の接続先設定は `settings.json` ではなく、拡張機能のグローバル保存領域に保存されます。同じ VS Code ユーザープロファイルのウィンドウ間で共有されます。
 - リクエストは、利用者が設定した接続先にのみ送信されます。
 - この拡張機能が独自のテレメトリをチャットリクエストへ追加することはありません。
 - 診断ログは API キー、生のチャット本文、バックエンドの会話 ID を出力しない設計です。
