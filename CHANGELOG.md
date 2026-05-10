@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Add an [Unreleased] section only while unpublished changes exist. Remove it again when shipping a release if nothing remains unreleased.
 
+## [0.1.4] - 2026-05-11
+
+### Added
+- Added per-endpoint API key source selection so each endpoint can use either VS Code SecretStorage or a named environment variable.
+- Added manager actions to import synced non-secret settings and to export or import passphrase-encrypted API keys across extension hosts.
+
+### Changed
+- The extension now prefers the workspace extension host in remote windows and logs activation and request diagnostics that make extension-host mismatches easier to diagnose.
+- Added automatic runtime localhost rewriting for Docker-container remotes and expanded the manager UI for remote/container-specific endpoint configuration.
+
+### Fixed
+- Restored chat responses in Dev Containers by aligning the provider with the remote extension host used by Copilot Chat.
+- When an environment-variable API key is not visible in the current extension host, chat can now prompt to store a local SecretStorage fallback instead of failing silently.
+
 ## [0.1.3] - 2026-05-07
 
 ### Changed

@@ -7,16 +7,27 @@ This document is for maintainers and release operators. The public README stays 
 From the repository root:
 
 ```powershell
-npm ci
-npm run package
+.\build.ps1
 ```
 
-This runs TypeScript checking, builds `dist/`, and creates a `.vsix` package such as `ghcc-custom-provider-0.1.2.vsix`.
+This runs dependency installation, audit, TypeScript checking, the extension build, VSIX packaging, an archive listing check, and moves the generated `.vsix` file into `build/`.
+
+On Windows Command Prompt you can use:
+
+```bat
+build.bat
+```
+
+On bash-compatible shells you can use:
+
+```bash
+./build.sh
+```
 
 ## Install a Local Build
 
 ```powershell
-code --install-extension .\ghcc-custom-provider-0.1.2.vsix
+code --install-extension .\build\ghcc-custom-provider-0.1.4.vsix
 ```
 
 For offline sharing or review builds, distribute only the generated `.vsix` file. Do not share local settings files, logs, `.env` files, or API keys.
@@ -24,19 +35,14 @@ For offline sharing or review builds, distribute only the generated `.vsix` file
 ## Release Checklist
 
 ```powershell
-npm ci
-npm audit --audit-level=moderate
-npm run check
-npm run build
-npx vsce ls
-npm run package
+.\build.ps1
 ```
 
 Before packaging a public release, move any `Unreleased` entries in `CHANGELOG.md` under the release version and date. Do not keep an empty `Unreleased` section in a shipped release. Add `Unreleased` back only after new unpublished work begins.
 
 Keep the `name`, `publisher`, `repository`, `homepage`, and `bugs` fields in `package.json` aligned with the live GitHub repository and Marketplace identity.
 
-Review the packaged file list before publishing.
+Review the packaged file list before publishing. The repository build scripts already run `npx vsce ls --tree` as part of the packaging flow.
 
 ## Package Contents
 
