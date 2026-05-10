@@ -6,6 +6,7 @@ import {
   ModelMetadataOverride,
   getActiveEndpoints,
   getModelDiscoveryEndpointType,
+  getRuntimeEndpointBaseUrl,
 } from '../config/settings';
 import { EndpointModelCacheStore } from './endpointModelCache';
 import { UpstreamConnectionSettings, UpstreamModelInfo, createBackendEndpointClient } from './upstreamClient';
@@ -158,7 +159,7 @@ export class ModelCatalog {
 }
 
 function buildConnection(endpoint: BackendEndpointSettings): UpstreamConnectionSettings | undefined {
-  const baseUrl = endpoint.baseUrl.trim();
+  const baseUrl = getRuntimeEndpointBaseUrl(endpoint).trim();
   if (!baseUrl) {
     return undefined;
   }

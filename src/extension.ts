@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 
 import { registerManagementCommands } from './commands/manageProvider';
 import { BridgeSettingsStore } from './config/storage';
-import { BridgeStoredSettings, PROVIDER_VENDOR, getActiveEndpoints, getEndpointById } from './config/settings';
+import { BridgeStoredSettings, PROVIDER_VENDOR, getActiveEndpoints, getEndpointById, getRuntimeEndpointBaseUrl } from './config/settings';
 import { BridgeChatProvider } from './provider/chatProvider';
 import { EndpointConnectionStatusStore } from './provider/endpointConnectionStatus';
 import { EndpointModelCacheStore } from './provider/endpointModelCache';
@@ -12,7 +12,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const outputChannel = vscode.window.createOutputChannel('GHCC Custom Provider', { log: true });
   context.subscriptions.push(outputChannel);
 
-  outputChannel.info('Activating GHCC Custom Provider.');
+  outputChannel.info(
+    `Activating GHCC Custom Provider. extensionKind=${formatExtensionKind(context.extension.extensionKind)}, remoteName=${vscode.env.remoteName ?? 'none'}, uiKind=${formatUiKind(vscode.env.uiKind)}, extensionMode=${formatExtensionMode(context.extensionMode)}`,
+  );
 
   const settingsStore = new BridgeSettingsStore(context, outputChannel);
   await settingsStore.initialize();
@@ -73,7 +75,7 @@ function buildActiveEndpointRefreshRequests(
       endpointId: endpoint.id,
       endpointName: endpoint.name || endpoint.baseUrl || endpoint.id,
       endpointType: endpoint.endpointType,
-      baseUrl: endpoint.baseUrl,
+      baseUrl: getRuntimeEndpointBaseUrl(endpoint),
     }));
 }
 
@@ -92,7 +94,7 @@ async function isCurrentActiveEndpointConnection(
     return false;
   }
 
-  if (normalizeBaseUrl(activeEndpoint.baseUrl) !== normalizeBaseUrl(request.baseUrl)) {
+  if (normalizeBaseUrl(getRuntimeEndpointBaseUrl(activeEndpoint)) !== normalizeBaseUrl(request.baseUrl)) {
     return false;
   }
 
@@ -102,4 +104,23 @@ async function isCurrentActiveEndpointConnection(
 
 function normalizeBaseUrl(value: string): string {
   return value.trim().replace(/\/+$/, '');
+}
+
+function formatExtensionKind(kind: vscode.ExtensionKind): string {
+  return kind === vscode.ExtensionKind.Workspace ? 'workspace' : 'ui';
+}
+
+function formatUiKind(kind: vscode.UIKind): string {
+  return kind === vscode.UIKind.Web ? 'web' : 'desktop';
+}
+
+function formatExtensionMode(mode: vscode.ExtensionMode): string {
+  switch (mode) {
+    case vscode.ExtensionMode.Development:
+      return 'development';
+    case vscode.ExtensionMode.Test:
+      return 'test';
+    default:
+      return 'production';
+  }
 }

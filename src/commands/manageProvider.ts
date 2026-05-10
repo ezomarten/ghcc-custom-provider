@@ -13,6 +13,7 @@ import {
   SHOW_LOGS_COMMAND,
   BridgeSettingsViewState,
   BridgeStoredSettings,
+  getRuntimeEndpointBaseUrl,
   sanitizeStoredSettings,
 } from '../config/settings';
 import { BridgeSettingsStore } from '../config/storage';
@@ -94,6 +95,58 @@ export function registerManagementCommands(
 
       if (command === 'openRawSettings') {
         await settingsStore.openRawSettings();
+        return;
+      }
+
+      if (command === 'importSyncedSettings') {
+        const confirmed = await confirmSyncedSettingsImport(settingsStore);
+        if (!confirmed) {
+          return;
+        }
+
+        try {
+          await settingsStore.importSyncedSettings();
+          void vscode.window.showInformationMessage('Imported synced GHCC Custom Provider settings. API keys remain local to this extension host.');
+          await refreshPanel();
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          void vscode.window.showErrorMessage(errorMessage);
+        }
+
+        return;
+      }
+
+      if (command === 'exportEncryptedApiKeys') {
+        const passphrase = await promptForEncryptionPassphrase(settingsStore, 'export');
+        if (!passphrase) {
+          return;
+        }
+
+        try {
+          const count = await settingsStore.exportEncryptedApiKeys(passphrase);
+          void vscode.window.showInformationMessage(`Exported ${count} encrypted GHCC Custom Provider API key(s) to synced storage.`);
+          await refreshPanel();
+        } catch (error) {
+          void vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+        }
+
+        return;
+      }
+
+      if (command === 'importEncryptedApiKeys') {
+        const passphrase = await promptForEncryptionPassphrase(settingsStore, 'import');
+        if (!passphrase) {
+          return;
+        }
+
+        try {
+          const count = await settingsStore.importEncryptedApiKeys(passphrase);
+          void vscode.window.showInformationMessage(`Imported ${count} GHCC Custom Provider API key(s) into this extension host's SecretStorage.`);
+          await refreshPanel();
+        } catch (error) {
+          void vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+        }
+
         return;
       }
 
@@ -342,9 +395,28 @@ async function renderPanelHtml(
               </dd>
               <dt>${text.endpoint.baseUrl}</dt>
               <dd><input id="baseUrl" type="text" placeholder="${escapeHtmlAttribute(text.endpoint.baseUrlPlaceholder)}" /></dd>
+              <dt>${text.endpoint.localhostRewrite}</dt>
+              <dd>
+                <select id="localhostRewrite">
+                  <option value="auto">${text.capabilities.auto}</option>
+                  <option value="on">${text.capabilities.on}</option>
+                  <option value="off">${text.capabilities.off}</option>
+                </select>
+                <div class="hint">${text.endpoint.localhostRewriteHint}</div>
+              </dd>
               <dt>${text.endpoint.defaultModel}</dt>
               <dd><input id="defaultModel" type="text" placeholder="${escapeHtmlAttribute(text.endpoint.defaultModelPlaceholder)}" /></dd>
-              <dt>${text.endpoint.apiKey}</dt>
+              <dt>${text.endpoint.apiKeySource}</dt>
+              <dd>
+                <select id="apiKeySource">
+                  <option value="secret-storage">${text.endpoint.apiKeySourceSecretStorage}</option>
+                  <option value="environment">${text.endpoint.apiKeySourceEnvironment}</option>
+                </select>
+                <div class="hint" id="apiKeySourceHint"></div>
+              </dd>
+              <dt id="apiKeyEnvironmentVariableTerm">${text.endpoint.apiKeyEnvironmentVariable}</dt>
+              <dd id="apiKeyEnvironmentVariableField"><input id="apiKeyEnvironmentVariable" type="text" placeholder="${escapeHtmlAttribute(text.endpoint.apiKeyEnvironmentVariablePlaceholder)}" /></dd>
+              <dt id="apiKeySecretTerm">${text.endpoint.apiKey}</dt>
               <dd>
                 <div class="inline-actions">
                   <button class="mini-button" id="apiKeyActionButton" type="button">${text.dynamic.setApiKey}</button>
@@ -557,6 +629,9 @@ async function renderPanelHtml(
             <h2>${text.actions.heading}</h2>
             <div class="actions-row">
               <button class="button-ghost" id="openRawSettingsButton" type="button">${text.actions.openRawSettings}</button>
+              <button class="button-ghost" id="importSyncedSettingsButton" type="button">${text.actions.importSyncedSettings}</button>
+              <button class="button-ghost" id="exportEncryptedApiKeysButton" type="button">${text.actions.exportEncryptedApiKeys}</button>
+              <button class="button-ghost" id="importEncryptedApiKeysButton" type="button">${text.actions.importEncryptedApiKeys}</button>
               <button class="button-ghost" id="showLogsButton" type="button">${text.actions.showLogs}</button>
               <button class="button-ghost" id="copyPromptButton" type="button">${text.actions.copyProbePrompt}</button>
             </div>
@@ -1089,7 +1164,14 @@ const elements = {
   endpointType: document.getElementById('endpointType'),
   endpointTypeDescription: document.getElementById('endpointTypeDescription'),
   baseUrl: document.getElementById('baseUrl'),
+  localhostRewrite: document.getElementById('localhostRewrite'),
   defaultModel: document.getElementById('defaultModel'),
+  apiKeySource: document.getElementById('apiKeySource'),
+  apiKeySourceHint: document.getElementById('apiKeySourceHint'),
+  apiKeyEnvironmentVariable: document.getElementById('apiKeyEnvironmentVariable'),
+  apiKeyEnvironmentVariableTerm: document.getElementById('apiKeyEnvironmentVariableTerm'),
+  apiKeyEnvironmentVariableField: document.getElementById('apiKeyEnvironmentVariableField'),
+  apiKeySecretTerm: document.getElementById('apiKeySecretTerm'),
   toolExposure: document.getElementById('toolExposure'),
   advertisedToolLimit: document.getElementById('advertisedToolLimit'),
   reasoningEffort: document.getElementById('reasoningEffort'),
@@ -1131,6 +1213,9 @@ const elements = {
   removeEndpointButton: document.getElementById('removeEndpointButton'),
   setActiveEndpointButton: document.getElementById('setActiveEndpointButton'),
   openRawSettingsButton: document.getElementById('openRawSettingsButton'),
+  importSyncedSettingsButton: document.getElementById('importSyncedSettingsButton'),
+  exportEncryptedApiKeysButton: document.getElementById('exportEncryptedApiKeysButton'),
+  importEncryptedApiKeysButton: document.getElementById('importEncryptedApiKeysButton'),
   showLogsButton: document.getElementById('showLogsButton'),
   copyPromptButton: document.getElementById('copyPromptButton'),
 };
@@ -1438,11 +1523,24 @@ function attachEventHandlers() {
       endpointName: selectedEndpoint.name,
       endpointType: selectedEndpoint.endpointType,
       baseUrl: selectedEndpoint.baseUrl,
+      localhostRewrite: selectedEndpoint.localhostRewrite,
     });
   });
 
   elements.openRawSettingsButton.addEventListener('click', () => {
     vscode.postMessage({ command: 'openRawSettings' });
+  });
+
+  elements.importSyncedSettingsButton.addEventListener('click', () => {
+    vscode.postMessage({ command: 'importSyncedSettings' });
+  });
+
+  elements.exportEncryptedApiKeysButton.addEventListener('click', () => {
+    vscode.postMessage({ command: 'exportEncryptedApiKeys' });
+  });
+
+  elements.importEncryptedApiKeysButton.addEventListener('click', () => {
+    vscode.postMessage({ command: 'importEncryptedApiKeys' });
   });
 
   elements.showLogsButton.addEventListener('click', () => {
@@ -1485,7 +1583,10 @@ function attachEventHandlers() {
     elements.endpointName,
     elements.endpointType,
     elements.baseUrl,
+    elements.localhostRewrite,
     elements.defaultModel,
+    elements.apiKeySource,
+    elements.apiKeyEnvironmentVariable,
     elements.toolExposure,
     elements.advertisedToolLimit,
     elements.reasoningEffort,
@@ -1689,7 +1790,10 @@ function populateEndpointInputs(endpoint) {
   elements.endpointType.value = endpoint.endpointType || 'openai-compatible';
   elements.endpointTypeDescription.textContent = getEndpointTypeDescription(endpoint.endpointType);
   elements.baseUrl.value = endpoint.baseUrl || '';
+  elements.localhostRewrite.value = endpoint.localhostRewrite || 'auto';
   elements.defaultModel.value = endpoint.defaultModel || '';
+  elements.apiKeySource.value = endpoint.apiKeySource || 'secret-storage';
+  elements.apiKeyEnvironmentVariable.value = endpoint.apiKeyEnvironmentVariable || '';
   elements.toolExposure.value = endpoint.toolExposure || 'auto';
   elements.advertisedToolLimit.value = stringifyOptionalNumber(endpoint.advertisedToolLimit);
   elements.reasoningEffort.value = endpoint.requestOverrides.reasoningEffort || '';
@@ -1820,7 +1924,10 @@ function syncSelectedEndpointFromInputs() {
   endpoint.name = elements.endpointName.value.trim() || endpoint.name || text.dynamic.endpointFallbackName;
   endpoint.endpointType = normalizeEndpointType(elements.endpointType.value);
   endpoint.baseUrl = elements.baseUrl.value.trim();
+  endpoint.localhostRewrite = normalizeToggleMode(elements.localhostRewrite.value);
   endpoint.defaultModel = elements.defaultModel.value.trim();
+  endpoint.apiKeySource = normalizeApiKeySource(elements.apiKeySource.value);
+  endpoint.apiKeyEnvironmentVariable = normalizeEnvironmentVariableName(elements.apiKeyEnvironmentVariable.value);
   endpoint.toolExposure = normalizeToggleMode(elements.toolExposure.value);
   endpoint.advertisedToolLimit = parseOptionalPositiveInteger(elements.advertisedToolLimit.value);
   endpoint.requestOverrides.reasoningEffort = elements.reasoningEffort.value.trim();
@@ -1999,7 +2106,10 @@ function createEndpointTemplate(index) {
     name: createUniqueEndpointName(text.dynamic.endpointDefaultNamePrefix + ' ' + index),
     endpointType: 'openai-compatible',
     baseUrl: '',
+    localhostRewrite: 'auto',
     defaultModel: '',
+    apiKeySource: 'secret-storage',
+    apiKeyEnvironmentVariable: '',
     toolExposure: 'auto',
     advertisedToolLimit: undefined,
     requestOverrides: {
@@ -2105,6 +2215,14 @@ function normalizeEndpointType(value) {
   return value === 'lm-studio' || value === 'lm-studio-rest' ? value : 'openai-compatible';
 }
 
+function normalizeApiKeySource(value) {
+  return value === 'environment' ? 'environment' : 'secret-storage';
+}
+
+function normalizeEnvironmentVariableName(value) {
+  return String(value || '').trim().replace(/[^A-Za-z0-9_]/g, '').slice(0, 120);
+}
+
 function normalizeLmStudioReasoning(value) {
   return value === 'off' || value === 'low' || value === 'medium' || value === 'high' || value === 'on'
     ? value
@@ -2145,8 +2263,14 @@ function persistUiState() {
 
 function updateConditionalFields(endpoint) {
   const isLmStudioEndpoint = endpoint.endpointType === 'lm-studio-rest';
+  const usesEnvironmentApiKey = endpoint.apiKeySource === 'environment';
   elements.lmStudioReasoningTerm.hidden = !isLmStudioEndpoint;
   elements.lmStudioReasoningField.hidden = !isLmStudioEndpoint;
+  elements.apiKeyEnvironmentVariableTerm.hidden = !usesEnvironmentApiKey;
+  elements.apiKeyEnvironmentVariableField.hidden = !usesEnvironmentApiKey;
+  elements.apiKeySecretTerm.hidden = usesEnvironmentApiKey;
+  elements.apiKeyActionButton.hidden = usesEnvironmentApiKey;
+  elements.apiKeySourceHint.textContent = usesEnvironmentApiKey ? text.endpoint.apiKeySourceEnvironmentHint : text.endpoint.apiKeySourceSecretStorageHint;
 }
 
 function renderSaveStatus() {
@@ -2276,6 +2400,57 @@ async function confirmEndpointRemoval(
   return result === text.dynamic.removeEndpointAction;
 }
 
+async function confirmSyncedSettingsImport(settingsStore: BridgeSettingsStore): Promise<boolean> {
+  const viewState = await settingsStore.getViewState();
+  const locale = resolveManagerLocale(viewState.settings.manager.language, vscode.env.language);
+  const text = getManagerText(locale);
+  const result = await vscode.window.showWarningMessage(
+    text.actions.importSyncedSettingsConfirmation,
+    { modal: true, detail: text.actions.importSyncedSettingsConfirmationDetail },
+    text.actions.importSyncedSettings,
+  );
+
+  return result === text.actions.importSyncedSettings;
+}
+
+async function promptForEncryptionPassphrase(settingsStore: BridgeSettingsStore, mode: 'export' | 'import'): Promise<string | undefined> {
+  const viewState = await settingsStore.getViewState();
+  const locale = resolveManagerLocale(viewState.settings.manager.language, vscode.env.language);
+  const text = getManagerText(locale);
+  const firstPrompt = mode === 'export'
+    ? text.actions.exportApiKeysPassphrasePrompt
+    : text.actions.importApiKeysPassphrasePrompt;
+  const passphrase = await vscode.window.showInputBox({
+    prompt: firstPrompt,
+    password: true,
+    ignoreFocusOut: true,
+  });
+
+  if (passphrase === undefined || !passphrase.trim()) {
+    return undefined;
+  }
+
+  if (mode === 'import') {
+    return passphrase;
+  }
+
+  const confirmation = await vscode.window.showInputBox({
+    prompt: text.actions.exportApiKeysPassphraseConfirmationPrompt,
+    password: true,
+    ignoreFocusOut: true,
+  });
+  if (confirmation === undefined) {
+    return undefined;
+  }
+
+  if (confirmation !== passphrase) {
+    void vscode.window.showErrorMessage(text.actions.passphraseMismatch);
+    return undefined;
+  }
+
+  return passphrase;
+}
+
 function formatManagerMessage(template: string, endpointName: string): string {
   return template.replaceAll('{name}', endpointName);
 }
@@ -2311,15 +2486,20 @@ function sanitizeConnectionTestRequest(message: unknown): {
   const baseUrl = typeof (message as { baseUrl?: unknown }).baseUrl === 'string'
     ? (message as { baseUrl: string }).baseUrl.trim()
     : '';
+  const localhostRewrite = normalizeBackendToggleMode(asString((message as { localhostRewrite?: unknown }).localhostRewrite));
 
   return {
     endpointId,
     endpointName,
     endpointType,
-    baseUrl,
+    baseUrl: getRuntimeEndpointBaseUrl({ baseUrl, localhostRewrite }),
   };
 }
 
 function normalizeBackendEndpointType(value: string | undefined): BackendEndpointType {
   return value === 'lm-studio' || value === 'lm-studio-rest' ? value : 'openai-compatible';
+}
+
+function normalizeBackendToggleMode(value: string | undefined): 'auto' | 'on' | 'off' {
+  return value === 'on' || value === 'off' ? value : 'auto';
 }

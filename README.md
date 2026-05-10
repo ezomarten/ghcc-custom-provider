@@ -21,6 +21,18 @@ GHCC Custom Provider connects GitHub Copilot Chat to OpenAI-compatible endpoints
 - Visual Studio Code 1.118 or later.
 - A VS Code chat experience that supports language model providers.
 - A reachable upstream endpoint and, if required, an API key.
+- In remote windows such as Dev Containers or Remote SSH, this extension must run in the same remote extension host as GitHub Copilot Chat. Check the running extensions list and confirm that `GHCC Custom Provider` appears on the container or remote side.
+
+### Dev Containers / Remote windows
+
+- Non-secret settings are stored under the running extension host's `globalStorageUri`. API keys are stored in that same extension host's SecretStorage. Because of that, settings from a locally installed copy and settings from a container-installed copy are not shared automatically.
+- Configured non-secret settings are also mirrored into a VS Code synced `globalState` key. When the container-installed copy has no settings file, or only an unconfigured settings file, it tries to import that synced mirror automatically. Manual migration is still needed if VS Code Settings Sync is disabled or the synced value has not arrived yet.
+- After changing settings on the host side, use `Import Synced Settings` from `Common Settings` to re-import the synced non-secret settings into the current extension host.
+- Each endpoint can read its API key from either `VS Code SecretStorage` or an `Environment variable`. SecretStorage is recommended but is scoped per extension host. Environment variables are convenient for Dev Containers and automation, but you must manage secure injection into that environment. In Dev Containers, environment variables may need to be passed through `remoteEnv` or `containerEnv` in `devcontainer.json` before the extension host can see them.
+- If an endpoint uses an environment variable but that variable is not visible to the current extension host, the chat flow offers to store a fallback key in this container's SecretStorage. That fallback is used only by this extension host.
+- As an advanced opt-in migration aid, visible API keys can be encrypted with a passphrase and stored in VS Code Settings Sync-backed `globalState`, then decrypted into another extension host's SecretStorage. Use `Export Encrypted API Keys` and `Import Encrypted API Keys` from the manager. The passphrase is never stored; if it is lost, the synced encrypted API keys cannot be recovered.
+- If LM Studio or another backend is listening on the host OS, `127.0.0.1` from inside the container points to the container itself. The default `Auto` mode rewrites `localhost` and `127.0.0.1` to `host.docker.internal` at request time when the extension is running in a Docker-container remote. Turn `Container localhost rewrite` to `Off` when the backend actually runs inside the container.
+- To install this extension automatically for a specific Dev Container, add it to that repository's `devcontainer.json` under `customizations.vscode.extensions`. An extension's own `package.json` cannot force-install that same extension into arbitrary user containers.
 
 ## Installation
 
@@ -48,6 +60,9 @@ From the extension entry in the Extensions view, the `Settings` action now opens
 - `Model Picker`: Backend models can be shown in the model picker by default. Even when this is turned off, the setup entry stays visible while no enabled endpoint is available so the manager is still easy to reopen.
 - `Common Settings`: Turn on the Probe model, debug logging, or conversation memory persistence when troubleshooting.
 - `Model Overrides`: Use simple default overrides for tool support, image support, and token limits across all models, or keep using advanced JSON for per-model tuning.
+- `API key source`: Choose SecretStorage or an environment variable per endpoint. Environment variables are useful when reusing the same endpoint definitions across Remote/Dev Container hosts.
+- `Import Synced Settings`: Re-imports the non-secret endpoint settings mirrored through VS Code Settings Sync into the current extension host.
+- `Export/Import Encrypted API Keys`: Moves passphrase-encrypted API keys through VS Code Settings Sync and imports them into the destination extension host's SecretStorage.
 
 ## Commands
 
@@ -66,6 +81,11 @@ Additional maintenance commands are available for API keys and raw settings when
 
 ## Notes and Limitations
 
+- If backend models appear in a Dev Container but chat requests produce no response and the `GHCC Custom Provider` log does not show `Language model chat response requested`, the extension host location is likely mismatched. Install or enable the extension on the container side, reload the window, and confirm the log shows `extensionKind=workspace` and a non-empty `remoteName`.
+- If host-side endpoints disappear after installing the extension into a container, this is expected because storage and SecretStorage are scoped per extension host. Move non-secret raw settings and register API keys again in the container.
+- The synced non-secret settings mirror never includes SecretStorage values. If API keys are missing after sync, switch the endpoint's `API key source` to an environment variable or register the key in that extension host's SecretStorage.
+- When using an environment variable as the API key source, the variable must be visible in the current extension host's `process.env`. In Dev Containers, configure `remoteEnv` or `containerEnv`, then restart the container or VS Code window.
+- Encrypted API key sync is an opt-in migration aid. The encrypted payload is stored in Settings Sync, so use a strong passphrase and avoid it on shared or unmanaged profiles.
 - `OpenAI-compatible` is the recommended and best-tested default path for generic providers.
 - `LM Studio` uses LM Studio's native model-list API for richer metadata such as context length, vision, and tool-use capability, then sends chat requests through the OpenAI-compatible chat-completions API so Copilot tool and agent flows can work normally.
 - `LM Studio Native` keeps LM Studio-specific `/api/v1/chat` continuation behavior, but VS Code custom tool definitions are not forwarded on that endpoint type.

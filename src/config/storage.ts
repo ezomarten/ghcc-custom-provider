@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { createHash, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, pbkdf2Sync, randomBytes } from 'node:crypto';
 import { promises as nodeFs } from 'node:fs';
 
 import * as vscode from 'vscode';
@@ -21,6 +21,40 @@ import {
   readLegacySettingsFromConfiguration,
   sanitizeStoredSettings,
 } from './settings';
+
+const SYNCED_SETTINGS_STATE_KEY = 'ghccCustomProvider.syncedSettings.v1';
+const SYNCED_ENCRYPTED_API_KEYS_STATE_KEY = 'ghccCustomProvider.syncedEncryptedApiKeys.v1';
+const API_KEY_ENCRYPTION_ITERATIONS = 250_000;
+
+interface SyncedSettingsState {
+  readonly version: 1;
+  readonly updatedAt: number;
+  readonly settings: BridgeStoredSettings;
+}
+
+interface SyncedEncryptedApiKeysState {
+  readonly version: 1;
+  readonly updatedAt: number;
+  readonly algorithm: 'aes-256-gcm';
+  readonly kdf: 'pbkdf2-sha256';
+  readonly iterations: number;
+  readonly salt: string;
+  readonly iv: string;
+  readonly tag: string;
+  readonly ciphertext: string;
+}
+
+interface ApiKeyExportPayload {
+  readonly version: 1;
+  readonly exportedAt: number;
+  readonly keys: readonly ApiKeyExportEntry[];
+}
+
+interface ApiKeyExportEntry {
+  readonly endpointId: string;
+  readonly endpointName: string;
+  readonly apiKey: string;
+}
 
 interface StoredSettingsFileData {
   fileUri: vscode.Uri | null;
@@ -61,6 +95,7 @@ export class BridgeSettingsStore {
   ) {}
 
   async initialize(): Promise<void> {
+    this.context.globalState.setKeysForSync([SYNCED_SETTINGS_STATE_KEY, SYNCED_ENCRYPTED_API_KEYS_STATE_KEY]);
     await this.migrateLegacyConfigurationIfNeeded();
   }
 
@@ -108,12 +143,29 @@ export class BridgeSettingsStore {
       return writeSettingsToStorageFile(this.context, sanitized);
     });
 
+    await this.updateSyncedSettings(sanitized);
     this.outputChannel.info(`Saved GHCC Custom Provider settings to ${saved.fileUri.fsPath}.`);
     this.changeEmitter.fire(createSettingsSavedChangeEvent(previousSettings, sanitized));
     return saved;
   }
 
   async getApiKey(endpointId?: string): Promise<string | undefined> {
+    const settings = await this.getSettings();
+    const endpoint = endpointId ? getEndpointById(settings, endpointId) : getPrimaryActiveEndpoint(settings);
+    if (endpoint?.apiKeySource === 'environment') {
+      const variableName = endpoint.apiKeyEnvironmentVariable.trim();
+      const value = variableName ? process.env[variableName]?.trim() || undefined : undefined;
+      if (value) {
+        return value;
+      }
+
+      if (variableName && !value) {
+        this.outputChannel.warn(
+          `API key environment variable ${variableName} is not visible to this extension host. remoteName=${vscode.env.remoteName ?? 'none'}`,
+        );
+      }
+    }
+
     if (endpointId) {
       const endpointApiKey = await this.context.secrets.get(getEndpointApiKeySecretKey(endpointId));
       if (endpointApiKey?.trim()) {
@@ -122,6 +174,73 @@ export class BridgeSettingsStore {
     }
 
     return (await this.context.secrets.get(BACKEND_API_KEY_SECRET_KEY)) ?? undefined;
+  }
+
+  async exportEncryptedApiKeys(passphrase: string): Promise<number> {
+    const normalizedPassphrase = passphrase.trim();
+    if (!normalizedPassphrase) {
+      throw new Error('A passphrase is required to encrypt synced API keys.');
+    }
+
+    const settings = await this.getSettings();
+    const keys: ApiKeyExportEntry[] = [];
+    for (const endpoint of settings.endpoints) {
+      const apiKey = await this.getApiKey(endpoint.id);
+      if (!apiKey?.trim()) {
+        continue;
+      }
+
+      keys.push({
+        endpointId: endpoint.id,
+        endpointName: endpoint.name || endpoint.baseUrl || endpoint.id,
+        apiKey: apiKey.trim(),
+      });
+    }
+
+    if (keys.length === 0) {
+      throw new Error('No API keys are available to export from SecretStorage or visible environment variables in this extension host.');
+    }
+
+    const encrypted = encryptApiKeyPayload({
+      version: 1,
+      exportedAt: Date.now(),
+      keys,
+    }, normalizedPassphrase);
+    await this.context.globalState.update(SYNCED_ENCRYPTED_API_KEYS_STATE_KEY, encrypted);
+    this.outputChannel.info(`Exported ${keys.length} encrypted GHCC Custom Provider API key(s) to synced storage.`);
+    return keys.length;
+  }
+
+  async importEncryptedApiKeys(passphrase: string): Promise<number> {
+    const normalizedPassphrase = passphrase.trim();
+    if (!normalizedPassphrase) {
+      throw new Error('A passphrase is required to import encrypted synced API keys.');
+    }
+
+    const encrypted = this.context.globalState.get<unknown>(SYNCED_ENCRYPTED_API_KEYS_STATE_KEY);
+    if (!isSyncedEncryptedApiKeysState(encrypted)) {
+      throw new Error('No encrypted synced GHCC Custom Provider API keys are available yet.');
+    }
+
+    const payload = decryptApiKeyPayload(encrypted, normalizedPassphrase);
+    let importedCount = 0;
+    for (const entry of payload.keys) {
+      if (!entry.endpointId.trim() || !entry.apiKey.trim()) {
+        continue;
+      }
+
+      await this.context.secrets.store(getEndpointApiKeySecretKey(entry.endpointId), entry.apiKey.trim());
+      importedCount += 1;
+    }
+
+    if (importedCount === 0) {
+      throw new Error('The encrypted synced API key payload did not contain any usable endpoint keys.');
+    }
+
+    const settings = await this.getSettings();
+    this.changeEmitter.fire(createSettingsSavedChangeEvent(settings, settings));
+    this.outputChannel.info(`Imported ${importedCount} encrypted GHCC Custom Provider API key(s) into this extension host's SecretStorage.`);
+    return importedCount;
   }
 
   async openRawSettings(): Promise<void> {
@@ -136,6 +255,31 @@ export class BridgeSettingsStore {
       preserveFocus: false,
       viewColumn: vscode.ViewColumn.Beside,
     });
+  }
+
+  async importSyncedSettings(): Promise<SavedSettingsFileData> {
+    const synced = this.readSyncedSettings();
+    if (!synced || !hasConfiguredSettings(synced)) {
+      throw new Error('No synced GHCC Custom Provider endpoint settings are available yet. Check that VS Code Settings Sync is enabled and that another extension host has saved configured endpoints.');
+    }
+
+    const previousSettings = await this.getSettings();
+    const saved = await withSettingsStorageLock(this.context, async () => {
+      const current = await readSettingsFromStorageFile(this.context, this.outputChannel);
+      if (current.readError) {
+        throw new Error(
+          `The local GHCC Custom Provider settings file is not valid JSON. Open the raw settings file and repair it before importing synced settings: ${current.readError}`,
+        );
+      }
+
+      return writeSettingsToStorageFile(this.context, synced);
+    });
+
+    this.outputChannel.info(
+      `Imported synced GHCC Custom Provider settings into local raw storage at ${saved.fileUri.fsPath}. API keys remain host-local and must be provided by SecretStorage or environment variables in this extension host.`,
+    );
+    this.changeEmitter.fire(createSettingsSavedChangeEvent(previousSettings, synced));
+    return saved;
   }
 
   async promptForApiKey(endpointId?: string, endpointName?: string): Promise<boolean> {
@@ -219,6 +363,29 @@ export class BridgeSettingsStore {
   private async performLegacyMigration(): Promise<void> {
     const existing = await readSettingsFromStorageFile(this.context, this.outputChannel);
     if (existing.exists) {
+      if (existing.readError) {
+        return;
+      }
+
+      const synced = this.readSyncedSettings();
+      if (!hasConfiguredSettings(existing.settings) && synced && hasConfiguredSettings(synced)) {
+        const { fileUri } = await writeSettingsToStorageFile(this.context, synced);
+        this.outputChannel.info(
+          `Imported synced GHCC Custom Provider settings over unconfigured raw storage at ${fileUri.fsPath}. API keys remain host-local and must be provided by SecretStorage or environment variables in this extension host.`,
+        );
+        return;
+      }
+
+      await this.updateSyncedSettings(existing.settings);
+      return;
+    }
+
+    const synced = this.readSyncedSettings();
+    if (synced) {
+      const { fileUri } = await writeSettingsToStorageFile(this.context, synced);
+      this.outputChannel.info(
+        `Imported synced GHCC Custom Provider settings into raw storage at ${fileUri.fsPath}. API keys remain host-local and must be provided by SecretStorage or environment variables in this extension host.`,
+      );
       return;
     }
 
@@ -228,6 +395,7 @@ export class BridgeSettingsStore {
     );
     if (workspaceStored.exists && !workspaceStored.readError) {
       const { fileUri } = await writeSettingsToStorageFile(this.context, workspaceStored.settings);
+      await this.updateSyncedSettings(workspaceStored.settings);
       this.outputChannel.info(
         `Imported workspace-scoped GHCC Custom Provider settings into global raw storage at ${fileUri.fsPath}. Future windows will share the same endpoint settings.`,
       );
@@ -240,6 +408,7 @@ export class BridgeSettingsStore {
     }
 
     const { fileUri } = await writeSettingsToStorageFile(this.context, legacy.settings);
+    await this.updateSyncedSettings(legacy.settings);
     this.outputChannel.info(
       `Imported legacy ${CONFIG_SECTION} settings into raw storage at ${fileUri.fsPath}. Future edits will no longer rely on settings.json writes.`,
     );
@@ -250,6 +419,21 @@ export class BridgeSettingsStore {
     const storedIds: string[] = [];
 
     for (const endpoint of settings.endpoints) {
+      if (endpoint.apiKeySource === 'environment') {
+        const variableName = endpoint.apiKeyEnvironmentVariable.trim();
+        if (variableName && process.env[variableName]?.trim()) {
+          storedIds.push(endpoint.id);
+          continue;
+        }
+
+        const endpointApiKey = await this.context.secrets.get(getEndpointApiKeySecretKey(endpoint.id));
+        if (endpointApiKey?.trim()) {
+          storedIds.push(endpoint.id);
+        }
+
+        continue;
+      }
+
       const endpointApiKey = await this.context.secrets.get(getEndpointApiKeySecretKey(endpoint.id));
       if (endpointApiKey?.trim() || (legacyApiKey?.trim() && isEndpointActive(settings, endpoint.id))) {
         storedIds.push(endpoint.id);
@@ -292,6 +476,122 @@ export class BridgeSettingsStore {
       isActive: Boolean(target.id) && isEndpointActive(settings, target.id),
     };
   }
+
+  private readSyncedSettings(): BridgeStoredSettings | undefined {
+    const synced = this.context.globalState.get<unknown>(SYNCED_SETTINGS_STATE_KEY);
+    if (!isSyncedSettingsState(synced)) {
+      return undefined;
+    }
+
+    return sanitizeStoredSettings(synced.settings);
+  }
+
+  private async updateSyncedSettings(settings: BridgeStoredSettings): Promise<void> {
+    if (!hasConfiguredSettings(settings)) {
+      return;
+    }
+
+    await this.context.globalState.update(SYNCED_SETTINGS_STATE_KEY, {
+      version: 1,
+      updatedAt: Date.now(),
+      settings: sanitizeStoredSettings(settings),
+    } satisfies SyncedSettingsState);
+  }
+}
+
+function hasConfiguredSettings(settings: BridgeStoredSettings): boolean {
+  return settings.endpoints.some((endpoint) => endpoint.id.trim() && endpoint.baseUrl.trim());
+}
+
+function isSyncedSettingsState(value: unknown): value is SyncedSettingsState {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+
+  const source = value as Partial<SyncedSettingsState>;
+  return source.version === 1 && typeof source.updatedAt === 'number' && Boolean(source.settings);
+}
+
+function isSyncedEncryptedApiKeysState(value: unknown): value is SyncedEncryptedApiKeysState {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+
+  const source = value as Partial<SyncedEncryptedApiKeysState>;
+  return source.version === 1
+    && source.algorithm === 'aes-256-gcm'
+    && source.kdf === 'pbkdf2-sha256'
+    && typeof source.iterations === 'number'
+    && typeof source.salt === 'string'
+    && typeof source.iv === 'string'
+    && typeof source.tag === 'string'
+    && typeof source.ciphertext === 'string';
+}
+
+function encryptApiKeyPayload(payload: ApiKeyExportPayload, passphrase: string): SyncedEncryptedApiKeysState {
+  const salt = randomBytes(16);
+  const iv = randomBytes(12);
+  const key = deriveApiKeyEncryptionKey(passphrase, salt, API_KEY_ENCRYPTION_ITERATIONS);
+  const cipher = createCipheriv('aes-256-gcm', key, iv);
+  const plaintext = Buffer.from(JSON.stringify(payload), 'utf8');
+  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  const tag = cipher.getAuthTag();
+
+  return {
+    version: 1,
+    updatedAt: Date.now(),
+    algorithm: 'aes-256-gcm',
+    kdf: 'pbkdf2-sha256',
+    iterations: API_KEY_ENCRYPTION_ITERATIONS,
+    salt: salt.toString('base64'),
+    iv: iv.toString('base64'),
+    tag: tag.toString('base64'),
+    ciphertext: ciphertext.toString('base64'),
+  };
+}
+
+function decryptApiKeyPayload(encrypted: SyncedEncryptedApiKeysState, passphrase: string): ApiKeyExportPayload {
+  try {
+    const salt = Buffer.from(encrypted.salt, 'base64');
+    const iv = Buffer.from(encrypted.iv, 'base64');
+    const tag = Buffer.from(encrypted.tag, 'base64');
+    const ciphertext = Buffer.from(encrypted.ciphertext, 'base64');
+    const key = deriveApiKeyEncryptionKey(passphrase, salt, encrypted.iterations);
+    const decipher = createDecipheriv('aes-256-gcm', key, iv);
+    decipher.setAuthTag(tag);
+    const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+    const parsed = JSON.parse(plaintext.toString('utf8')) as unknown;
+    if (!isApiKeyExportPayload(parsed)) {
+      throw new Error('The decrypted payload was not a valid API key export.');
+    }
+
+    return parsed;
+  } catch (error) {
+    throw new Error(`Could not decrypt synced API keys. Check the passphrase and synced data: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function deriveApiKeyEncryptionKey(passphrase: string, salt: Buffer, iterations: number): Buffer {
+  return pbkdf2Sync(passphrase, salt, iterations, 32, 'sha256');
+}
+
+function isApiKeyExportPayload(value: unknown): value is ApiKeyExportPayload {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+
+  const source = value as Partial<ApiKeyExportPayload>;
+  if (source.version !== 1 || typeof source.exportedAt !== 'number' || !Array.isArray(source.keys)) {
+    return false;
+  }
+
+  return source.keys.every((entry) => Boolean(
+    entry
+      && typeof entry === 'object'
+      && !Array.isArray(entry)
+      && typeof (entry as Partial<ApiKeyExportEntry>).endpointId === 'string'
+      && typeof (entry as Partial<ApiKeyExportEntry>).apiKey === 'string',
+  ));
 }
 
 function getEndpointApiKeySecretKey(endpointId: string): string {
@@ -406,7 +706,11 @@ function hasEndpointConnectionChanged(
     return previousEndpoint !== nextEndpoint;
   }
 
-  return previousEndpoint.endpointType !== nextEndpoint.endpointType || previousEndpoint.baseUrl !== nextEndpoint.baseUrl;
+  return previousEndpoint.endpointType !== nextEndpoint.endpointType
+    || previousEndpoint.baseUrl !== nextEndpoint.baseUrl
+    || previousEndpoint.localhostRewrite !== nextEndpoint.localhostRewrite
+    || previousEndpoint.apiKeySource !== nextEndpoint.apiKeySource
+    || previousEndpoint.apiKeyEnvironmentVariable !== nextEndpoint.apiKeyEnvironmentVariable;
 }
 
 function hasEndpointModelPresentationChanged(

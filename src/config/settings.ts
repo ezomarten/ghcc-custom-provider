@@ -17,6 +17,7 @@ export const BACKEND_API_KEY_SECRET_PREFIX = 'ghccCustomProvider.backendApiKey:'
 
 const ENDPOINT_TYPES = new Set<BackendEndpointType>(['openai-compatible', 'lm-studio', 'lm-studio-rest']);
 const TOGGLE_MODES = new Set<SettingToggleMode>(['auto', 'on', 'off']);
+const API_KEY_SOURCES = new Set<ApiKeySource>(['secret-storage', 'environment']);
 const LM_STUDIO_REASONING_MODES = new Set<LmStudioReasoningMode>(['auto', 'off', 'low', 'medium', 'high', 'on']);
 const MANAGER_LANGUAGE_MODES = new Set<ManagerLanguageMode>(['auto', 'en', 'ja']);
 const DEFAULT_ENDPOINT_ID = 'primary-endpoint';
@@ -35,6 +36,7 @@ const LEGACY_REASONING_MODEL_SUFFIX = '::reasoning';
 
 export type BackendEndpointType = 'openai-compatible' | 'lm-studio' | 'lm-studio-rest';
 export type SettingToggleMode = 'auto' | 'on' | 'off';
+export type ApiKeySource = 'secret-storage' | 'environment';
 export type LmStudioReasoningMode = 'auto' | 'off' | 'low' | 'medium' | 'high' | 'on';
 export type ManagerLanguageMode = 'auto' | 'en' | 'ja';
 
@@ -71,7 +73,10 @@ export interface BackendEndpointSettings {
   name: string;
   endpointType: BackendEndpointType;
   baseUrl: string;
+  localhostRewrite: SettingToggleMode;
   defaultModel: string;
+  apiKeySource: ApiKeySource;
+  apiKeyEnvironmentVariable: string;
   toolExposure: SettingToggleMode;
   advertisedToolLimit?: number;
   requestOverrides: BackendRequestOverrides;
@@ -134,7 +139,10 @@ export function createDefaultBackendEndpointSettings(
     name,
     endpointType: 'openai-compatible',
     baseUrl: '',
+    localhostRewrite: 'auto',
     defaultModel: '',
+    apiKeySource: 'secret-storage',
+    apiKeyEnvironmentVariable: '',
     toolExposure: 'auto',
     advertisedToolLimit: undefined,
     requestOverrides: {
@@ -530,7 +538,12 @@ function sanitizeBackendEndpointCandidate(
     : fallbackName;
   endpoint.endpointType = normalizeEndpointType(source.endpointType);
   endpoint.baseUrl = typeof source.baseUrl === 'string' ? normalizeBaseUrl(source.baseUrl) : '';
+  endpoint.localhostRewrite = normalizeToggleMode(source.localhostRewrite);
   endpoint.defaultModel = typeof source.defaultModel === 'string' ? normalizeStoredModelId(source.defaultModel) : '';
+  endpoint.apiKeySource = normalizeApiKeySource(source.apiKeySource);
+  endpoint.apiKeyEnvironmentVariable = typeof source.apiKeyEnvironmentVariable === 'string'
+    ? normalizeEnvironmentVariableName(source.apiKeyEnvironmentVariable)
+    : '';
   endpoint.toolExposure = normalizeToggleMode(source.toolExposure);
   endpoint.advertisedToolLimit = parseOptionalInteger(source.advertisedToolLimit, MAX_ADVERTISED_TOOL_LIMIT);
   endpoint.requestOverrides = sanitizeRequestOverrides(source.requestOverrides);
@@ -633,6 +646,15 @@ function normalizeEndpointType(value: unknown): BackendEndpointType {
   return ENDPOINT_TYPES.has(normalized as BackendEndpointType)
     ? normalized as BackendEndpointType
     : 'openai-compatible';
+}
+
+function normalizeApiKeySource(value: unknown): ApiKeySource {
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return API_KEY_SOURCES.has(normalized as ApiKeySource) ? normalized as ApiKeySource : 'secret-storage';
+}
+
+function normalizeEnvironmentVariableName(value: string): string {
+  return value.trim().replace(/[^A-Za-z0-9_]/g, '').slice(0, MAX_NAME_LENGTH);
 }
 
 function normalizeToggleMode(value: unknown): SettingToggleMode {
@@ -754,4 +776,38 @@ export function getChatEndpointType(endpointType: BackendEndpointType): BackendE
 
 export function getModelDiscoveryEndpointType(endpointType: BackendEndpointType): BackendEndpointType {
   return endpointType === 'lm-studio' ? 'lm-studio-rest' : endpointType;
+}
+
+export function getRuntimeEndpointBaseUrl(endpoint: Pick<BackendEndpointSettings, 'baseUrl' | 'localhostRewrite'>, remoteName = vscode.env.remoteName): string {
+  const baseUrl = endpoint.baseUrl.trim();
+  if (!baseUrl) {
+    return '';
+  }
+
+  const shouldRewrite = endpoint.localhostRewrite === 'on'
+    || (endpoint.localhostRewrite === 'auto' && isContainerRemote(remoteName));
+  if (!shouldRewrite) {
+    return baseUrl;
+  }
+
+  try {
+    const parsed = new URL(baseUrl);
+    if (isLocalhostName(parsed.hostname)) {
+      parsed.hostname = 'host.docker.internal';
+      return parsed.toString().replace(/\/+$/, '');
+    }
+  } catch {
+    return baseUrl;
+  }
+
+  return baseUrl;
+}
+
+function isContainerRemote(remoteName: string | undefined): boolean {
+  return /container/i.test(remoteName ?? '');
+}
+
+function isLocalhostName(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1' || normalized === '[::1]';
 }

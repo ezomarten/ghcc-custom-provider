@@ -11,6 +11,7 @@ import {
   getEndpointById,
   getPrimaryActiveEndpoint,
   getChatEndpointType,
+  getRuntimeEndpointBaseUrl,
   isEndpointActive,
 } from '../config/settings';
 import { BridgeSettingsChangeEvent, BridgeSettingsStore } from '../config/storage';
@@ -38,6 +39,8 @@ const SYNTHETIC_REASONING_REPLAY_PREFIX =
   'Internal hidden reasoning trace from the previous assistant turn. Use it as prior private reasoning context for continuity only, and do not reveal it unless explicitly asked.';
 const SYNTHETIC_REASONING_REPLAY_CHAR_LIMIT = 12000;
 const MAX_HIDDEN_REASONING_CONTENT_CHARS = 64000;
+const MODEL_INFORMATION_LOG_INTERVAL_MS = 30_000;
+const TOKEN_COUNT_LOG_INTERVAL_MS = 30_000;
 
 interface RequestSummary {
   messageCount: number;
@@ -56,6 +59,10 @@ export class BridgeChatProvider implements vscode.LanguageModelChatProvider<Brid
   private readonly modelCatalog: ModelCatalog;
   private readonly conversationStateCache: ConversationStateCache;
   private readonly languageModelChangeEmitter = new vscode.EventEmitter<void>();
+  private modelInformationRequestCount = 0;
+  private lastModelInformationLogAt = 0;
+  private tokenCountRequestCount = 0;
+  private lastTokenCountLogAt = 0;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -93,6 +100,7 @@ export class BridgeChatProvider implements vscode.LanguageModelChatProvider<Brid
       return;
     }
 
+    this.outputChannel.info(`Language model catalog change notification fired. kind=${event.languageModelRefreshKind}, refreshEndpointIds=${event.modelRefreshEndpointIds.join(', ') || 'none'}`);
     this.languageModelChangeEmitter.fire();
   }
 
@@ -102,6 +110,7 @@ export class BridgeChatProvider implements vscode.LanguageModelChatProvider<Brid
       return;
     }
 
+    this.outputChannel.info(`Language model catalog change notification fired after model cache update. endpointId=${endpointId}`);
     this.languageModelChangeEmitter.fire();
   }
 
@@ -110,9 +119,11 @@ export class BridgeChatProvider implements vscode.LanguageModelChatProvider<Brid
     token: vscode.CancellationToken,
   ): Promise<BridgeChatModel[]> {
     const settings = await this.settingsStore.getSettings();
-    return this.modelCatalog.listModels(settings, token, {
+    const models = await this.modelCatalog.listModels(settings, token, {
       includeSetupModel: true,
     });
+    this.logModelInformationRequest(settings, models, _options);
+    return models;
   }
 
   async provideLanguageModelChatResponse(
@@ -122,6 +133,10 @@ export class BridgeChatProvider implements vscode.LanguageModelChatProvider<Brid
     progress: vscode.Progress<vscode.LanguageModelResponsePart>,
     token: vscode.CancellationToken,
   ): Promise<void> {
+    this.outputChannel.info(
+      `Language model chat response requested. model=${model.id}, source=${model.source}, endpointId=${model.endpointId ?? 'none'}, messages=${messages.length}, tools=${options.tools?.length ?? 0}, remoteName=${vscode.env.remoteName ?? 'none'}`,
+    );
+
     if (model.source === 'probe') {
       await this.provideProbeResponse(model, messages, options, progress, token);
       return;
@@ -141,7 +156,39 @@ export class BridgeChatProvider implements vscode.LanguageModelChatProvider<Brid
     _token: vscode.CancellationToken,
   ): Promise<number> {
     const flattenedText = typeof text === 'string' ? text : extractTextFromMessage(text);
+    this.logTokenCountRequest(_model, flattenedText.length);
     return estimateTokenCount(flattenedText);
+  }
+
+  private logModelInformationRequest(
+    settings: BridgeStoredSettings,
+    models: readonly BridgeChatModel[],
+    options: vscode.PrepareLanguageModelChatModelOptions,
+  ): void {
+    this.modelInformationRequestCount += 1;
+    const now = Date.now();
+    if (this.modelInformationRequestCount !== 1 && now - this.lastModelInformationLogAt < MODEL_INFORMATION_LOG_INTERVAL_MS) {
+      return;
+    }
+
+    this.lastModelInformationLogAt = now;
+    const silent = (options as { silent?: unknown }).silent === true;
+    this.outputChannel.info(
+      `Language model information requested. count=${this.modelInformationRequestCount}, models=${models.length}, backendModels=${models.filter((model) => model.source === 'backend').length}, setupModels=${models.filter((model) => model.source === 'setup').length}, activeEndpoints=${getActiveEndpoints(settings).length}, silent=${silent}, remoteName=${vscode.env.remoteName ?? 'none'}`,
+    );
+  }
+
+  private logTokenCountRequest(model: BridgeChatModel, textLength: number): void {
+    this.tokenCountRequestCount += 1;
+    const now = Date.now();
+    if (this.tokenCountRequestCount !== 1 && now - this.lastTokenCountLogAt < TOKEN_COUNT_LOG_INTERVAL_MS) {
+      return;
+    }
+
+    this.lastTokenCountLogAt = now;
+    this.outputChannel.info(
+      `Language model token count requested. count=${this.tokenCountRequestCount}, model=${model.id}, source=${model.source}, textLength=${textLength}, remoteName=${vscode.env.remoteName ?? 'none'}`,
+    );
   }
 
   private async provideProbeResponse(
@@ -270,13 +317,39 @@ export class BridgeChatProvider implements vscode.LanguageModelChatProvider<Brid
     }
 
     await this.conversationStateCache.configure(settings.conversationState);
-    const apiKey = await this.settingsStore.getApiKey(endpoint.id);
+    let apiKey = await this.settingsStore.getApiKey(endpoint.id);
+    if (endpoint.apiKeySource === 'environment' && endpoint.apiKeyEnvironmentVariable.trim() && !apiKey) {
+      const storeFallback = await vscode.window.showWarningMessage(
+        `API key environment variable ${endpoint.apiKeyEnvironmentVariable.trim()} is not visible to this extension host. Store an API key in this container's SecretStorage instead?`,
+        'Store API Key',
+      );
+      if (storeFallback === 'Store API Key') {
+        const didStore = await this.settingsStore.promptForApiKey(endpoint.id, endpoint.name || endpoint.baseUrl || endpoint.id);
+        if (didStore) {
+          apiKey = await this.settingsStore.getApiKey(endpoint.id);
+        }
+      }
+
+      if (!apiKey) {
+        throw new Error(
+          `API key environment variable ${endpoint.apiKeyEnvironmentVariable.trim()} is not visible to the current extension host. In a Dev Container, pass it through devcontainer.json remoteEnv/containerEnv or store a fallback key in this container's SecretStorage.`,
+        );
+      }
+    }
+
+    if (endpoint.apiKeySource === 'environment' && endpoint.apiKeyEnvironmentVariable.trim() && apiKey) {
+      this.outputChannel.info(
+        `Using API key for ${endpoint.id} from ${process.env[endpoint.apiKeyEnvironmentVariable.trim()]?.trim() ? 'environment variable' : 'SecretStorage fallback'}.`,
+      );
+    }
+
     const requestSummary = summarizeMessages(messages);
     const hiddenStateObservation = inspectHiddenState(messages, settings.probe.hiddenStateMimeType);
     const requestedModelId = model.id;
     const upstreamModelId = model.upstreamId || model.id;
 
-    if (!endpoint.baseUrl) {
+    const runtimeBaseUrl = getRuntimeEndpointBaseUrl(endpoint);
+    if (!runtimeBaseUrl) {
       throw new Error('Backend base URL is not configured. Save it in GHCC Custom Provider: Manage Provider.');
     }
 
@@ -346,7 +419,7 @@ export class BridgeChatProvider implements vscode.LanguageModelChatProvider<Brid
     const result = await upstreamClient.streamChatCompletion(
       {
         endpointType: chatEndpointType,
-        baseUrl: endpoint.baseUrl,
+        baseUrl: runtimeBaseUrl,
         apiKey,
       },
       backendPayload.payload,
