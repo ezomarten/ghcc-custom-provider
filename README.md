@@ -8,7 +8,7 @@ GHCC Custom Provider connects GitHub Copilot Chat to OpenAI-compatible endpoints
 
 - Register backend chat models in the VS Code model picker.
 - Manage multiple endpoints and expose models from any enabled combination through a single panel.
-- Support `OpenAI-compatible`, `LM Studio`, and `LM Studio Native` endpoint types.
+- Support `OpenAI-compatible (Chat Completions API)`, `OpenAI-compatible (Responses API)`, `LM Studio (Chat Completions API)`, `LM Studio (Responses API)`, and `LM Studio Native` endpoint types.
 - Control tool forwarding, tool limits, request options, and per-model overrides.
 - Optionally keep conversation continuity data across turns and reloads.
 - Test connections, inspect logs, and enable an optional diagnostic Probe model.
@@ -41,7 +41,7 @@ GHCC Custom Provider connects GitHub Copilot Chat to OpenAI-compatible endpoints
 
 1. Open the chat model picker and choose the GHCC Custom Provider setup entry, or run `GHCC Custom Provider: Manage Provider` from the Command Palette.
 2. Add an endpoint name and Base URL.
-3. Choose `OpenAI-compatible` for most providers, `LM Studio` for LM Studio's richer model metadata plus OpenAI-compatible chat, or `LM Studio Native` for LM Studio's native chat API.
+3. Choose `OpenAI-compatible (Chat Completions API)` for most providers. Choose `OpenAI-compatible (Responses API)` for providers that explicitly expose OpenAI Responses API or Open Responses-compatible `/v1/responses`. For LM Studio, choose `LM Studio (Chat Completions API)` for richer model metadata plus `/v1/chat/completions`, `LM Studio (Responses API)` only when `/v1/responses` is available, or `LM Studio Native` for LM Studio's native chat API.
 4. Set an API key if your endpoint requires one.
 5. Run `Test connection`.
 6. Select one of the discovered models in chat and start chatting.
@@ -55,6 +55,7 @@ From the extension entry in the Extensions view, the `Settings` action now opens
 - `Tool limit`: Optionally advertise and forward fewer tools to reduce tool volume.
 - `Preserved thinking limit`: Caps hidden thinking stored or replayed as `reasoning_content`; when truncated, the tail is kept because it is usually closest to the final conclusion. Blank uses `64000` characters. Set `0` to keep continuation IDs such as LM Studio Native response IDs while dropping reasoning text. `-1` removes the cap, which is not recommended.
 - `Synthetic replay limit`: Caps hidden thinking injected into synthetic system replay prompts; when truncated, the beginning and end are kept with the middle omitted. Blank uses `12000` characters. Set `0` to disable synthetic replay. `-1` removes the cap, which is not recommended.
+- `Store Responses state`: Responses API only. Set `On` when you want server-side continuation through `store: true` and `previous_response_id`. The default keeps `store: false`; `Auto` still honors legacy Advanced Custom JSON `{ "store": true }` settings.
 - `Model Picker`: Backend models can be shown in the model picker by default. Even when this is turned off, the setup entry stays visible while no enabled endpoint is available so the manager is still easy to reopen.
 - `Common Settings`: Turn on the Probe model, debug logging, or conversation memory persistence when troubleshooting.
 - `Model Overrides`: Use simple default overrides for tool support, image support, and token limits across all models, or keep using advanced JSON for per-model tuning.
@@ -84,8 +85,11 @@ Additional maintenance commands are available for API keys and raw settings when
 - The synced non-secret settings mirror never includes SecretStorage values. If API keys are missing after sync, switch the endpoint's `API key source` to an environment variable or register the key in that extension host's SecretStorage.
 - When using an environment variable as the API key source, the variable must be visible in the current extension host's `process.env`. In Dev Containers, configure `remoteEnv` or `containerEnv`, then restart the container or VS Code window.
 - Encrypted API key sync is an opt-in migration aid. The encrypted payload is stored in Settings Sync, so use a strong passphrase and avoid it on shared or unmanaged profiles.
-- `OpenAI-compatible` is the recommended and best-tested default path for generic providers.
-- `LM Studio` uses LM Studio's native model-list API for richer metadata such as context length, vision, and tool-use capability, then sends chat requests through the OpenAI-compatible chat-completions API so Copilot tool and agent flows can work normally.
+- `OpenAI-compatible (Chat Completions API)` is the recommended and best-tested default path for generic providers.
+- `OpenAI-compatible (Responses API)` fetches models through `/v1/models` and sends chat through `/v1/responses`. It is an optional path for OpenAI Responses API and Open Responses-compatible providers.
+- `LM Studio (Chat Completions API)` uses LM Studio's native model-list API for richer metadata such as context length, vision, and tool-use capability, then sends chat requests through `/v1/chat/completions` so Copilot tool and agent flows can work normally.
+- `LM Studio (Responses API)` uses LM Studio's native model-list API but sends chat through `/v1/responses`. Use it only when that LM Studio build or compatible endpoint explicitly supports Responses.
+- Responses API modes send `store: false` by default. When `Preserve thinking` is `On`, the bridge asks for `reasoning.encrypted_content`, stores returned reasoning items in hidden state, and replays them on the next turn. Turn `Store Responses state` `On` only when you want stateful `previous_response_id` continuation.
 - `LM Studio Native` keeps LM Studio-specific `/api/v1/chat` continuation behavior, but VS Code custom tool definitions are not forwarded on that endpoint type.
 - If a backend finishes a turn without visible assistant text or tool calls, the provider now raises an explicit error instead of letting Copilot Chat fall through to `Sorry, no response was returned.` This usually means the model emitted reasoning-only output on that turn.
 - Copilot may decide tool budgeting before the provider request is built. If a local model struggles with tools, set `Send tools to endpoint` to `Off`.

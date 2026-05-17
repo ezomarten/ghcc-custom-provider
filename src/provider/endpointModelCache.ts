@@ -209,7 +209,7 @@ function sanitizeStringArray(raw: unknown): string[] | undefined {
 }
 
 function isEndpointType(value: unknown): value is BackendEndpointType {
-  return value === 'openai-compatible' || value === 'lm-studio' || value === 'lm-studio-rest';
+  return value === 'openai-compatible' || value === 'responses-api' || value === 'lm-studio' || value === 'lm-studio-responses' || value === 'lm-studio-rest';
 }
 
 function normalizeBaseUrl(value: string): string {

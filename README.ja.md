@@ -8,7 +8,7 @@ GHCC Custom Provider は、Visual Studio Code の Language Model Chat Provider A
 
 - VS Code のモデル選択に、接続先バックエンドのチャットモデルを登録します。
 - 複数の接続先を 1 つの管理画面で登録し、有効化した接続先のモデルを同時に使い分けられます。
-- `OpenAI-compatible`、`LM Studio`、`LM Studio Native` に対応します。
+- `OpenAI-compatible (Chat Completions API)`、`OpenAI-compatible (Responses API)`、`LM Studio (Chat Completions API)`、`LM Studio (Responses API)`、`LM Studio Native` に対応します。
 - ツール転送、ツール数の上限、リクエストオプション、モデルごとの上書きを調整できます。
 - 会話の継続に必要なデータを、ターン間や必要に応じて再読み込み後にも引き継げます。
 - 接続テスト、ログ確認、診断用 Probe モデルの表示に対応します。
@@ -41,7 +41,7 @@ GHCC Custom Provider は、Visual Studio Code の Language Model Chat Provider A
 
 1. チャットのモデル選択を開き、GHCC Custom Provider のセットアップ項目を選ぶか、コマンドパレットから `GHCC Custom Provider: Manage Provider` を実行します。
 2. 接続先の名前と Base URL を入力します。
-3. 多くの接続先では `OpenAI-compatible` を選びます。LM Studio では、詳細なモデル情報を取得しつつ OpenAI-compatible チャットで動かす `LM Studio`、またはネイティブチャット API を使う `LM Studio Native` を選びます。
+3. 多くの接続先では `OpenAI-compatible (Chat Completions API)` を選びます。OpenAI Responses API または Open Responses 互換の `/v1/responses` を明示的に提供する接続先では `OpenAI-compatible (Responses API)` を選べます。LM Studio では、詳細なモデル情報を取得しつつ `/v1/chat/completions` で動かす `LM Studio (Chat Completions API)`、`/v1/responses` 対応時だけ選ぶ `LM Studio (Responses API)`、またはネイティブチャット API を使う `LM Studio Native` を選びます。
 4. 接続先で必要なら API キーを設定します。
 5. `Test connection` を実行します。
 6. 取得できたモデルをチャットで選び、利用を開始します。
@@ -55,6 +55,7 @@ GHCC Custom Provider は、Visual Studio Code の Language Model Chat Provider A
 - `Tool limit`: 広告するツール数と転送するツール数を減らしたいときに使います。
 - `Preserved thinking limit`: `reasoning_content` として保存または再送する hidden thinking の上限です。超過時は、結論に近いことが多い末尾を残します。未入力時は `64000` 文字までです。`0` にすると LM Studio Native の response ID などは残しつつ推論本文を破棄できます。`-1` は無制限ですが非推奨です。
 - `Synthetic replay limit`: 合成 system replay prompt に入れる hidden thinking の上限です。超過時は先頭と末尾を残し、中間を省略します。未入力時は `12000` 文字までです。`0` にすると合成 replay を無効化できます。`-1` は無制限ですが非推奨です。
+- `Store Responses state`: Responses API 専用です。`store: true` と `previous_response_id` によるサーバー側の会話継続を使いたい場合に `On` にします。既定では `store: false` を維持します。`Auto` では互換のため、従来の Advanced Custom JSON `{ "store": true }` も引き続き有効です。
 - `Model Picker`: バックエンドモデルをモデルピッカーへ既定で表示できます。これを Off にしても、接続先が未設定・未接続の間は setup 項目を表示し続けるため、管理画面は開き直しやすいままです。
 - `Common Settings`: 問題切り分け時に Probe モデル、詳細ログ、会話メモリの永続化を有効にできます。
 - `Model Overrides`: 全モデル向けのツール対応、画像対応、トークン上限は簡易欄でまとめて上書きでき、必要なら従来どおり詳細JSONでモデルごとの調整もできます。
@@ -84,8 +85,11 @@ GHCC Custom Provider は、Visual Studio Code の Language Model Chat Provider A
 - 非シークレット設定の同期ミラーは SecretStorage の内容を含みません。同期後に API キー未設定になる場合は、接続先の `API key source` を環境変数にするか、その拡張ホストの SecretStorage に登録してください。
 - 環境変数を API key source にした場合でも、変数が現在の拡張ホストの `process.env` に存在しなければ使えません。Dev Container では `remoteEnv` / `containerEnv` を設定したあと、コンテナまたは VS Code ウィンドウを再起動してください。
 - 暗号化 API key 同期は opt-in の移行補助です。暗号化済みデータは Settings Sync に保存されるため、パスフレーズは十分長くし、共有端末や管理外のプロファイルでは利用しないでください。
-- 汎用接続先で推奨かつ最も検証が進んでいる既定経路は `OpenAI-compatible` です。
-- `LM Studio` は LM Studio のネイティブなモデル一覧 API からコンテキスト長、画像入力、ツール利用可否などの詳細情報を取得し、チャットは OpenAI-compatible chat completions API へ送ります。Copilot のツールや Agent の流れにはこのモードを推奨します。
+- 汎用接続先で推奨かつ最も検証が進んでいる既定経路は `OpenAI-compatible (Chat Completions API)` です。
+- `OpenAI-compatible (Responses API)` は `/v1/models` でモデル一覧を取得し、チャットは `/v1/responses` へ送ります。OpenAI Responses API と、それに基づく Open Responses 互換プロバイダー向けの任意経路です。
+- `LM Studio (Chat Completions API)` は LM Studio のネイティブなモデル一覧 API からコンテキスト長、画像入力、ツール利用可否などの詳細情報を取得し、チャットは `/v1/chat/completions` へ送ります。Copilot のツールや Agent の流れにはこのモードを推奨します。
+- `LM Studio (Responses API)` は LM Studio のネイティブなモデル一覧 API を使い、チャットは `/v1/responses` へ送ります。LM Studio または互換接続先が Responses 対応を明示している場合だけ選びます。
+- Responses API 系の種別は既定で `store: false` を送ります。`Preserve thinking` が `On` のときは `reasoning.encrypted_content` を要求し、返却された reasoning item を hidden state に保存して次ターンへ再送します。stateful な `previous_response_id` 継続が必要な場合だけ `Store Responses state` を `On` にしてください。
 - `LM Studio Native` では LM Studio 固有の `/api/v1/chat` 会話継続を利用できますが、VS Code のカスタムツール定義はそのまま転送しません。
 - バックエンドがターンを完了したのに可視の assistant テキストも tool call も返さなかった場合、この拡張は `Sorry, no response was returned.` に落ちる代わりに明示的なエラーを返します。多くは、そのターンで reasoning-only の出力になっていることを意味します。
 - Copilot 側でツール予算が先に決まることがあるため、ローカルモデルがツール付き入力を苦手とする場合は `Send tools to endpoint` を `Off` にしてください。

@@ -99,6 +99,65 @@ export interface OpenAIChatCompletionRequest {
   [key: string]: unknown;
 }
 
+export interface ResponsesTextContentPart {
+  type: 'input_text';
+  text: string;
+}
+
+export interface ResponsesImageContentPart {
+  type: 'input_image';
+  image_url: string;
+}
+
+export type ResponsesInputContentPart = ResponsesTextContentPart | ResponsesImageContentPart;
+
+export interface ResponsesInputMessageItem {
+  type?: 'message';
+  role: 'system' | 'user' | 'assistant';
+  content: string | ResponsesInputContentPart[];
+}
+
+export interface ResponsesFunctionCallItem {
+  type: 'function_call';
+  call_id: string;
+  name: string;
+  arguments: string;
+}
+
+export interface ResponsesFunctionCallOutputItem {
+  type: 'function_call_output';
+  call_id: string;
+  output: string;
+}
+
+export interface ResponsesReasoningItem {
+  type: 'reasoning';
+  id?: string;
+  encrypted_content?: string;
+  summary?: unknown[];
+  content?: unknown[];
+}
+
+export type ResponsesInputItem = ResponsesInputMessageItem | ResponsesFunctionCallItem | ResponsesFunctionCallOutputItem | ResponsesReasoningItem;
+
+export interface ResponsesWireToolDefinition {
+  type: 'function';
+  name: string;
+  description?: string;
+  parameters?: object;
+}
+
+export interface ResponsesRequest {
+  model: string;
+  input: ResponsesInputItem[];
+  stream: boolean;
+  store?: boolean;
+  previous_response_id?: string;
+  tools?: ResponsesWireToolDefinition[];
+  tool_choice?: 'auto' | 'required';
+  [key: string]: unknown;
+}
+
 export interface LMStudioChatMessageInput {
   type: 'text';
   content: string;
@@ -137,6 +196,7 @@ export interface UpstreamChatCompletionResult {
   created?: number;
   content: string;
   reasoningContent: string;
+  responsesReasoningItems?: ResponsesReasoningItem[];
   toolCalls: OpenAIWireToolCall[];
   finishReason?: string;
 }
@@ -158,6 +218,18 @@ interface OpenAIAccumulatedToolCall {
     name: string;
     arguments: string;
   };
+}
+
+interface ResponsesStreamState {
+  id?: string;
+  model: string;
+  created?: number;
+  content: string;
+  reasoningContent: string;
+  reasoningItems: ResponsesReasoningItem[];
+  toolCalls: OpenAIWireToolCall[];
+  pendingToolCalls: Map<string, { callId: string; name: string; arguments: string }>;
+  finishReason?: string;
 }
 
 interface BackendEndpointClient {
@@ -185,6 +257,10 @@ export function createBackendEndpointClient(
 ): BackendEndpointClient {
   if (endpointType === 'lm-studio-rest') {
     return new LmStudioRestUpstreamClient(outputChannel);
+  }
+
+  if (endpointType === 'responses-api') {
+    return new ResponsesApiUpstreamClient(outputChannel);
   }
 
   return new OpenAICompatibleUpstreamClient(outputChannel);
@@ -528,6 +604,125 @@ class OpenAICompatibleUpstreamClient extends BaseUpstreamClient {
   }
 }
 
+class ResponsesApiUpstreamClient extends BaseUpstreamClient {
+  readonly endpointType = 'responses-api' as const;
+
+  async listModels(
+    connection: UpstreamConnectionSettings,
+    token: vscode.CancellationToken,
+  ): Promise<UpstreamModelInfo[]> {
+    const response = await this.fetchJson<{ data?: unknown[] }>(connection, '/v1/models', token, { method: 'GET' });
+    const models = Array.isArray(response.data) ? response.data : [];
+
+    return models
+      .map((rawModel) => normalizeOpenAIModelInfo(rawModel, this.endpointType))
+      .filter((model): model is UpstreamModelInfo => Boolean(model));
+  }
+
+  async streamChatCompletion(
+    connection: UpstreamConnectionSettings,
+    payload: Record<string, unknown>,
+    token: vscode.CancellationToken,
+    onTextDelta?: (value: string) => void,
+  ): Promise<UpstreamChatCompletionResult> {
+    const opened = await this.openFetch(connection, '/v1/responses', token, {
+      method: 'POST',
+      headers: {
+        'Accept': 'text/event-stream',
+        'Content-Type': 'application/json',
+        'User-Agent': 'GHCC-Custom-Provider/0.1 VSCode-LanguageModelChatProvider',
+      },
+      body: JSON.stringify(payload as ResponsesRequest),
+    });
+    const response = opened.response;
+
+    try {
+      if (!response.body) {
+        throw new Error('The upstream Responses API response did not include a response body.');
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+      const payloadModel = typeof payload.model === 'string' ? payload.model : '';
+      const state: ResponsesStreamState = {
+        model: payloadModel,
+        content: '',
+        reasoningContent: '',
+        reasoningItems: [],
+        toolCalls: [],
+        pendingToolCalls: new Map(),
+      };
+
+      const processEventBlock = (eventBlock: string): void => {
+        const normalizedBlock = eventBlock.replace(/\r/g, '');
+        if (!normalizedBlock.trim()) {
+          return;
+        }
+
+        const dataLines: string[] = [];
+        for (const line of normalizedBlock.split('\n')) {
+          if (line.startsWith('data:')) {
+            dataLines.push(line.slice(5).trim());
+          }
+        }
+
+        const dataText = dataLines.join('\n').trim();
+        if (!dataText || dataText === '[DONE]') {
+          return;
+        }
+
+        try {
+          applyResponsesStreamEvent(state, JSON.parse(dataText) as Record<string, unknown>, onTextDelta);
+        } catch {
+          this.outputChannel.debug(`Ignoring malformed Responses API SSE block: ${normalizedBlock.slice(0, 240)}`);
+        }
+      };
+
+      for await (const chunk of response.body) {
+        buffer = normalizeSseEventBuffer(buffer + decoder.decode(chunk, { stream: true }));
+        let boundaryIndex = buffer.indexOf('\n\n');
+
+        while (boundaryIndex >= 0) {
+          const eventBlock = buffer.slice(0, boundaryIndex);
+          buffer = buffer.slice(boundaryIndex + 2);
+          processEventBlock(eventBlock);
+          boundaryIndex = buffer.indexOf('\n\n');
+        }
+      }
+
+      buffer = normalizeSseEventBuffer(buffer + decoder.decode(), true);
+      if (buffer.trim()) {
+        processEventBlock(buffer);
+      }
+
+      return {
+        endpointType: this.endpointType,
+        id: state.id,
+        responseId: state.id,
+        model: state.model,
+        created: state.created,
+        content: state.content,
+        reasoningContent: state.reasoningContent,
+        responsesReasoningItems: state.reasoningItems.length > 0 ? state.reasoningItems : undefined,
+        toolCalls: state.toolCalls,
+        finishReason: state.finishReason,
+      };
+    } catch (error) {
+      if (token.isCancellationRequested || isCancellationError(error)) {
+        throw new vscode.CancellationError();
+      }
+
+      if (isLikelyTransportError(error)) {
+        throw createUpstreamTransportError(error, 'stream');
+      }
+
+      throw error;
+    } finally {
+      opened.disposeCancellation();
+    }
+  }
+}
+
 class LmStudioRestUpstreamClient extends BaseUpstreamClient {
   readonly endpointType = 'lm-studio-rest' as const;
 
@@ -713,7 +908,7 @@ function normalizeSseEventBuffer(value: string, final = false): string {
   return final ? normalized.replace(/\r/g, '\n') : normalized;
 }
 
-function normalizeOpenAIModelInfo(rawModel: unknown): UpstreamModelInfo | undefined {
+function normalizeOpenAIModelInfo(rawModel: unknown, endpointType: BackendEndpointType = 'openai-compatible'): UpstreamModelInfo | undefined {
   if (!rawModel || typeof rawModel !== 'object') {
     return undefined;
   }
@@ -734,7 +929,7 @@ function normalizeOpenAIModelInfo(rawModel: unknown): UpstreamModelInfo | undefi
   }
 
   return {
-    endpointType: 'openai-compatible',
+    endpointType,
     id: candidate.id.trim(),
     kind: typeof candidate.object === 'string' ? candidate.object : undefined,
     object: typeof candidate.object === 'string' ? candidate.object : undefined,
@@ -1005,6 +1200,188 @@ function applyLmStudioChatEnd(
   if (toolCalls.length > 0) {
     state.toolCalls = toolCalls;
   }
+}
+
+function applyResponsesStreamEvent(
+  state: ResponsesStreamState,
+  eventPayload: Record<string, unknown>,
+  onTextDelta?: (value: string) => void,
+): void {
+  const eventType = typeof eventPayload.type === 'string' ? eventPayload.type : '';
+
+  if (eventType === 'response.completed' || eventType === 'response.incomplete' || eventType === 'response.failed') {
+    const response = isPlainObject(eventPayload.response) ? eventPayload.response : undefined;
+    if (response) {
+      applyResponsesFinalResponse(state, response);
+    }
+    state.finishReason = eventType.replace('response.', '');
+    return;
+  }
+
+  if ((eventType === 'response.output_text.delta' || eventType === 'response.text.delta') && typeof eventPayload.delta === 'string') {
+    state.content += eventPayload.delta;
+    onTextDelta?.(eventPayload.delta);
+    return;
+  }
+
+  if ((eventType === 'response.reasoning_text.delta' || eventType === 'response.reasoning.summary_text.delta') && typeof eventPayload.delta === 'string') {
+    state.reasoningContent += eventPayload.delta;
+    return;
+  }
+
+  if (eventType === 'response.function_call_arguments.delta' && typeof eventPayload.delta === 'string') {
+    const itemId = typeof eventPayload.item_id === 'string' ? eventPayload.item_id : `tool-call-${state.pendingToolCalls.size + 1}`;
+    const pending = state.pendingToolCalls.get(itemId) ?? { callId: itemId, name: '', arguments: '' };
+    pending.arguments += eventPayload.delta;
+    if (typeof eventPayload.name === 'string') {
+      pending.name = eventPayload.name;
+    }
+    if (typeof eventPayload.call_id === 'string') {
+      pending.callId = eventPayload.call_id;
+    }
+    state.pendingToolCalls.set(itemId, pending);
+    return;
+  }
+
+  if (eventType === 'response.function_call_arguments.done') {
+    const itemId = typeof eventPayload.item_id === 'string' ? eventPayload.item_id : `tool-call-${state.pendingToolCalls.size + 1}`;
+    const pending = state.pendingToolCalls.get(itemId) ?? { callId: itemId, name: '', arguments: '' };
+    if (typeof eventPayload.arguments === 'string') {
+      pending.arguments = eventPayload.arguments;
+    }
+    if (typeof eventPayload.name === 'string') {
+      pending.name = eventPayload.name;
+    }
+    if (typeof eventPayload.call_id === 'string') {
+      pending.callId = eventPayload.call_id;
+    }
+    appendResponsesToolCall(state.toolCalls, pending.callId, pending.name, pending.arguments);
+    state.pendingToolCalls.delete(itemId);
+    return;
+  }
+
+  if (eventType === 'response.output_item.done' && isPlainObject(eventPayload.item)) {
+    applyResponsesOutputItem(state, eventPayload.item);
+  }
+}
+
+function applyResponsesFinalResponse(state: ResponsesStreamState, response: Record<string, unknown>): void {
+  if (typeof response.id === 'string') {
+    state.id = response.id;
+  }
+  if (typeof response.model === 'string') {
+    state.model = response.model;
+  }
+  if (typeof response.created_at === 'number') {
+    state.created = response.created_at;
+  }
+  if (typeof response.output_text === 'string' && response.output_text.length > state.content.length) {
+    state.content = response.output_text;
+  }
+  if (Array.isArray(response.output)) {
+    for (const item of response.output) {
+      if (isPlainObject(item)) {
+        applyResponsesOutputItem(state, item);
+      }
+    }
+  }
+}
+
+function applyResponsesOutputItem(state: ResponsesStreamState, item: Record<string, unknown>): void {
+  if (item.type === 'message' && Array.isArray(item.content)) {
+    const text = item.content
+      .map((part) => isPlainObject(part) && typeof part.text === 'string' ? part.text : undefined)
+      .filter((part): part is string => Boolean(part))
+      .join('');
+    if (text.length > state.content.length) {
+      state.content = text;
+    }
+    return;
+  }
+
+  if (item.type === 'reasoning' && Array.isArray(item.summary)) {
+    appendResponsesReasoningItem(state.reasoningItems, item);
+    const summaryText = item.summary
+      .map((part) => isPlainObject(part) && typeof part.text === 'string' ? part.text : undefined)
+      .filter((part): part is string => Boolean(part))
+      .join('\n')
+      .trim();
+    if (summaryText.length > state.reasoningContent.length) {
+      state.reasoningContent = summaryText;
+    }
+    return;
+  }
+
+  if (item.type === 'reasoning') {
+    appendResponsesReasoningItem(state.reasoningItems, item);
+    return;
+  }
+
+  if (item.type === 'function_call') {
+    appendResponsesToolCall(
+      state.toolCalls,
+      typeof item.call_id === 'string' ? item.call_id : typeof item.id === 'string' ? item.id : `tool-call-${state.toolCalls.length + 1}`,
+      typeof item.name === 'string' ? item.name : '',
+      typeof item.arguments === 'string' ? item.arguments : '',
+    );
+  }
+}
+
+function appendResponsesToolCall(target: OpenAIWireToolCall[], callId: string, name: string, argumentsValue: string): void {
+  if (!name || target.some((toolCall) => toolCall.id === callId)) {
+    return;
+  }
+
+  target.push({
+    id: callId,
+    type: 'function',
+    function: {
+      name,
+      arguments: parseToolArguments(argumentsValue),
+    },
+  });
+}
+
+function appendResponsesReasoningItem(target: ResponsesReasoningItem[], item: Record<string, unknown>): void {
+  const normalized = normalizeResponsesReasoningItem(item);
+  if (!normalized) {
+    return;
+  }
+
+  const duplicateKey = normalized.id || normalized.encrypted_content;
+  if (duplicateKey && target.some((existing) => existing.id === duplicateKey || existing.encrypted_content === duplicateKey)) {
+    return;
+  }
+
+  target.push(normalized);
+}
+
+function normalizeResponsesReasoningItem(item: Record<string, unknown>): ResponsesReasoningItem | undefined {
+  if (item.type !== 'reasoning') {
+    return undefined;
+  }
+
+  const normalized: ResponsesReasoningItem = { type: 'reasoning' };
+  if (typeof item.id === 'string' && item.id.trim()) {
+    normalized.id = item.id.trim();
+  }
+  if (typeof item.encrypted_content === 'string' && item.encrypted_content.trim()) {
+    normalized.encrypted_content = item.encrypted_content;
+  }
+  if (Array.isArray(item.summary)) {
+    normalized.summary = item.summary;
+  }
+  if (Array.isArray(item.content)) {
+    normalized.content = item.content;
+  }
+
+  return normalized.encrypted_content || normalized.id || normalized.summary?.length || normalized.content?.length
+    ? normalized
+    : undefined;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
 function normalizeLmStudioToolCall(item: unknown, index: number): OpenAIWireToolCall | undefined {

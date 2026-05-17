@@ -121,6 +121,7 @@ export class ConversationStateCache {
           reasoningContent: entry.reasoningContent,
           endpointType: entry.endpointType,
           responseId: entry.responseId,
+          responsesReasoningItems: entry.responsesReasoningItems,
         },
         transcriptKey,
       };
@@ -573,8 +574,9 @@ function isStoredConversationState(value: unknown): value is StoredConversationS
     typeof candidate.transcriptKey === 'string' &&
     typeof candidate.updatedAt === 'number' &&
     Number.isFinite(candidate.updatedAt) &&
-    (candidate.endpointType === undefined || candidate.endpointType === 'openai-compatible' || candidate.endpointType === 'lm-studio' || candidate.endpointType === 'lm-studio-rest') &&
-    (candidate.responseId === undefined || typeof candidate.responseId === 'string')
+    (candidate.endpointType === undefined || candidate.endpointType === 'openai-compatible' || candidate.endpointType === 'responses-api' || candidate.endpointType === 'lm-studio' || candidate.endpointType === 'lm-studio-responses' || candidate.endpointType === 'lm-studio-rest') &&
+    (candidate.responseId === undefined || typeof candidate.responseId === 'string') &&
+    (candidate.responsesReasoningItems === undefined || Array.isArray(candidate.responsesReasoningItems))
   );
 }
 

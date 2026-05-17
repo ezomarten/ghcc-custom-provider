@@ -25,6 +25,15 @@ export interface ReasoningHiddenState {
   reasoningContent: string;
   endpointType?: BackendEndpointType;
   responseId?: string;
+  responsesReasoningItems?: ResponsesReasoningStateItem[];
+}
+
+export interface ResponsesReasoningStateItem {
+  type: 'reasoning';
+  id?: string;
+  encrypted_content?: string;
+  summary?: unknown[];
+  content?: unknown[];
 }
 
 export type BridgeHiddenState = ProbeHiddenState | ReasoningHiddenState;
@@ -70,6 +79,7 @@ export function createReasoningHiddenState(
   options?: {
     endpointType?: BackendEndpointType;
     responseId?: string;
+    responsesReasoningItems?: ResponsesReasoningStateItem[];
   },
 ): ReasoningHiddenState {
   return {
@@ -80,6 +90,7 @@ export function createReasoningHiddenState(
     reasoningContent,
     endpointType: options?.endpointType,
     responseId: options?.responseId?.trim() || undefined,
+    responsesReasoningItems: normalizeResponsesReasoningStateItems(options?.responsesReasoningItems),
   };
 }
 
@@ -365,8 +376,56 @@ function isReasoningHiddenState(value: unknown): value is ReasoningHiddenState {
     candidate.schemaVersion === 1 &&
     typeof candidate.modelId === 'string' &&
     typeof candidate.createdAt === 'string' &&
-    typeof candidate.reasoningContent === 'string'
+    typeof candidate.reasoningContent === 'string' &&
+    (candidate.responsesReasoningItems === undefined || Array.isArray(candidate.responsesReasoningItems))
   );
+}
+
+function normalizeResponsesReasoningStateItems(value: unknown): ResponsesReasoningStateItem[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const items = value
+    .map((item) => normalizeResponsesReasoningStateItem(item))
+    .filter((item): item is ResponsesReasoningStateItem => Boolean(item));
+
+  return items.length > 0 ? items : undefined;
+}
+
+function normalizeResponsesReasoningStateItem(value: unknown): ResponsesReasoningStateItem | undefined {
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+
+  const candidate = value as {
+    type?: unknown;
+    id?: unknown;
+    encrypted_content?: unknown;
+    summary?: unknown;
+    content?: unknown;
+  };
+  if (candidate.type !== 'reasoning') {
+    return undefined;
+  }
+
+  const normalized: ResponsesReasoningStateItem = { type: 'reasoning' };
+  if (typeof candidate.id === 'string' && candidate.id.trim()) {
+    normalized.id = candidate.id.trim();
+  }
+  if (typeof candidate.encrypted_content === 'string' && candidate.encrypted_content.trim()) {
+    normalized.encrypted_content = candidate.encrypted_content;
+  }
+  if (Array.isArray(candidate.summary)) {
+    normalized.summary = candidate.summary;
+  }
+  if (Array.isArray(candidate.content)) {
+    normalized.content = candidate.content;
+  }
+
+  return normalized.encrypted_content || normalized.id || normalized.summary?.length || normalized.content?.length
+    ? normalized
+    : undefined;
 }
 
 function isBridgeHiddenState(value: unknown): value is BridgeHiddenState {

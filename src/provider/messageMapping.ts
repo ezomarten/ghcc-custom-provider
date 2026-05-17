@@ -16,6 +16,10 @@ import {
   OpenAIWireMessage,
   OpenAIWireToolCall,
   OpenAIWireToolDefinition,
+  ResponsesInputContentPart,
+  ResponsesInputItem,
+  ResponsesRequest,
+  ResponsesWireToolDefinition,
 } from './upstreamClient';
 
 const dataPartTextDecoder = new TextDecoder();
@@ -30,6 +34,12 @@ export interface MessageMappingResult {
 export interface LmStudioMessageMappingResult {
   input: string | LMStudioChatInputPart[];
   latestBackendState?: ReasoningHiddenState;
+}
+
+export interface ResponsesMessageMappingResult {
+  input: ResponsesInputItem[];
+  latestBackendState?: ReasoningHiddenState;
+  mappedItemCount: number;
 }
 
 export function mapRequestMessagesToOpenAI(
@@ -296,6 +306,99 @@ function mapUserMessageToLmStudioInput(
   return converted;
 }
 
+function mapUserMessageToResponsesInput(
+  message: vscode.LanguageModelChatRequestMessage,
+  hiddenStateMimeType: string,
+): ResponsesInputItem[] {
+  const converted: ResponsesInputItem[] = [];
+  const visibleContentParts: ResponsesInputContentPart[] = [];
+
+  for (const part of message.content) {
+    if (isTextPart(part)) {
+      visibleContentParts.push({ type: 'input_text', text: part.value });
+      continue;
+    }
+
+    if (isToolResultPart(part)) {
+      if (visibleContentParts.length > 0) {
+        converted.push({
+          role: 'user',
+          content: normalizeResponsesUserContent(visibleContentParts),
+        });
+        visibleContentParts.length = 0;
+      }
+
+      converted.push({
+        type: 'function_call_output',
+        call_id: part.callId,
+        output: serializeToolResultContent(part.content),
+      });
+      continue;
+    }
+
+    if (isDataPart(part)) {
+      if (isHiddenStateMimeType(part, hiddenStateMimeType) || part.mimeType === 'cache_control') {
+        continue;
+      }
+
+      if (part.mimeType.startsWith('image/')) {
+        visibleContentParts.push({
+          type: 'input_image',
+          image_url: dataPartToDataUrl(part),
+        });
+        continue;
+      }
+
+      const textValue = decodeDataPartText(part);
+      if (textValue) {
+        visibleContentParts.push({ type: 'input_text', text: textValue });
+      }
+    }
+  }
+
+  if (visibleContentParts.length > 0) {
+    converted.push({
+      role: 'user',
+      content: normalizeResponsesUserContent(visibleContentParts),
+    });
+  }
+
+  return converted;
+}
+
+function mapAssistantMessageToResponsesInput(
+  message: vscode.LanguageModelChatRequestMessage,
+): ResponsesInputItem[] {
+  const converted: ResponsesInputItem[] = [];
+  const contentParts: string[] = [];
+
+  for (const part of message.content) {
+    if (isTextPart(part)) {
+      contentParts.push(part.value);
+      continue;
+    }
+
+    if (isToolCallPart(part)) {
+      converted.push({
+        type: 'function_call',
+        call_id: part.callId,
+        name: part.name,
+        arguments: JSON.stringify(part.input ?? {}),
+      });
+    }
+  }
+
+  const content = contentParts.join('\n').trim();
+  if (content) {
+    converted.unshift({
+      role: 'assistant',
+      content,
+    });
+  }
+
+  return converted;
+}
+
 function findLatestUserMessage(
   messages: readonly vscode.LanguageModelChatRequestMessage[],
 ): vscode.LanguageModelChatRequestMessage | undefined {
@@ -327,6 +430,14 @@ function findLatestAssistantReasoningLength(messages: readonly OpenAIWireMessage
 
 function normalizeUserContent(parts: OpenAIInputContentPart[]): string | OpenAIInputContentPart[] {
   if (parts.length === 1 && parts[0].type === 'text') {
+    return parts[0].text;
+  }
+
+  return parts;
+}
+
+function normalizeResponsesUserContent(parts: ResponsesInputContentPart[]): string | ResponsesInputContentPart[] {
+  if (parts.length === 1 && parts[0].type === 'input_text') {
     return parts[0].text;
   }
 
@@ -413,4 +524,55 @@ function isToolResultPart(part: unknown): part is { callId: string; content: rea
 
   const candidate = part as { callId?: unknown; content?: unknown };
   return typeof candidate.callId === 'string' && Array.isArray(candidate.content);
+}
+
+export function mapRequestMessagesToResponses(
+  messages: readonly vscode.LanguageModelChatRequestMessage[],
+  hiddenStateMimeType: string,
+): ResponsesMessageMappingResult {
+  const input: ResponsesInputItem[] = [];
+  const latestBackendState = extractLatestReasoningHiddenStateFromMessages(messages, hiddenStateMimeType);
+
+  for (const message of messages) {
+    if (message.role === vscode.LanguageModelChatMessageRole.User) {
+      input.push(...mapUserMessageToResponsesInput(message, hiddenStateMimeType));
+      continue;
+    }
+
+    if (message.role === vscode.LanguageModelChatMessageRole.Assistant) {
+      input.push(...mapAssistantMessageToResponsesInput(message));
+    }
+  }
+
+  return {
+    input,
+    latestBackendState,
+    mappedItemCount: input.length,
+  };
+}
+
+export function mapResponsesTools(
+  tools: readonly vscode.LanguageModelChatTool[] | undefined,
+): ResponsesWireToolDefinition[] | undefined {
+  if (!tools || tools.length === 0) {
+    return undefined;
+  }
+
+  return tools.map((tool) => ({
+    type: 'function',
+    name: tool.name,
+    description: tool.description,
+    parameters: tool.inputSchema,
+  }));
+}
+
+export function mapResponsesToolMode(
+  toolMode: vscode.LanguageModelChatToolMode,
+  tools: readonly vscode.LanguageModelChatTool[] | undefined,
+): ResponsesRequest['tool_choice'] {
+  if (!tools || tools.length === 0) {
+    return undefined;
+  }
+
+  return toolMode === vscode.LanguageModelChatToolMode.Required ? 'required' : 'auto';
 }

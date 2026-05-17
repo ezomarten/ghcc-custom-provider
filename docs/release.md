@@ -27,7 +27,7 @@ On bash-compatible shells you can use:
 ## Install a Local Build
 
 ```powershell
-code --install-extension .\build\ghcc-custom-provider-0.1.4.vsix
+code --install-extension .\build\ghcc-custom-provider-0.1.5.vsix
 ```
 
 For offline sharing or review builds, distribute only the generated `.vsix` file. Do not share local settings files, logs, `.env` files, or API keys.

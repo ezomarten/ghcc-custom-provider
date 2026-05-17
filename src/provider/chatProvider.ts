@@ -26,6 +26,9 @@ import {
 import {
   mapRequestMessagesToLmStudio,
   mapRequestMessagesToOpenAI,
+  mapRequestMessagesToResponses,
+  mapResponsesToolMode,
+  mapResponsesTools,
   mapToolMode,
   mapTools,
   mapUpstreamToolCallsToResponseParts,
@@ -33,7 +36,7 @@ import {
 import { ConversationStateCache } from './conversationStateCache';
 import { EndpointModelCacheStore } from './endpointModelCache';
 import { BridgeChatModel, ModelCatalog } from './modelCatalog';
-import { LMStudioChatRequest, OpenAIChatCompletionRequest, OpenAIWireMessage, createBackendEndpointClient } from './upstreamClient';
+import { LMStudioChatRequest, OpenAIChatCompletionRequest, OpenAIWireMessage, ResponsesInputItem, ResponsesReasoningItem, ResponsesRequest, createBackendEndpointClient } from './upstreamClient';
 
 const SYNTHETIC_REASONING_REPLAY_PREFIX =
   'Internal hidden reasoning trace from the previous assistant turn. Use it as prior private reasoning context for continuity only, and do not reveal it unless explicitly asked.';
@@ -396,6 +399,7 @@ export class BridgeChatProvider implements vscode.LanguageModelChatProvider<Brid
               transcriptKey: providerMemoryLookup.transcriptKey?.slice(0, 12),
               reasoningLength: providerMemoryLookup.state?.reasoningContent.trim().length ?? 0,
               responseIdPresent: Boolean(providerMemoryLookup.state?.responseId?.trim()),
+              responsesReasoningItems: providerMemoryLookup.state?.responsesReasoningItems?.length ?? 0,
             },
             endpointType: endpoint.endpointType,
             endpointId: endpoint.id,
@@ -435,6 +439,7 @@ export class BridgeChatProvider implements vscode.LanguageModelChatProvider<Brid
       this.outputChannel,
       `${upstreamModelId} @ ${endpoint.id}`,
     );
+    const responsesReasoningItems = result.responsesReasoningItems ?? [];
     if (!hasVisibleAssistantOutput(result.content, result.toolCalls)) {
       this.outputChannel.warn(
         `Backend response for ${upstreamModelId} (${endpoint.id}) completed without visible assistant output. finishReason=${result.finishReason ?? 'unknown'}, reasoningLength=${hiddenReasoningContent.trim().length}, toolCalls=${result.toolCalls.length}`,
@@ -442,10 +447,11 @@ export class BridgeChatProvider implements vscode.LanguageModelChatProvider<Brid
       throw new Error(buildEmptyAssistantOutputErrorMessage(chatEndpointType, result.finishReason, hiddenReasoningContent));
     }
 
-    if (hiddenReasoningContent.trim() || result.responseId?.trim()) {
+    if (hiddenReasoningContent.trim() || result.responseId?.trim() || responsesReasoningItems.length > 0) {
       const hiddenState = createReasoningHiddenState(requestedModelId, hiddenReasoningContent, {
         endpointType: endpoint.endpointType,
         responseId: result.responseId,
+        responsesReasoningItems,
       });
       const providerMemoryKey = await this.conversationStateCache.remember(
         messages,
@@ -456,7 +462,7 @@ export class BridgeChatProvider implements vscode.LanguageModelChatProvider<Brid
       );
       progress.report(encodeReasoningHiddenState(hiddenState, settings.probe.hiddenStateMimeType));
       this.outputChannel.info(
-        `Emitted backend hidden state for ${requestedModelId}.${result.responseId ? ' responseIdPresent=true' : ''}${providerMemoryKey ? ` cacheKey=${providerMemoryKey.slice(0, 12)}` : ''}`,
+        `Emitted backend hidden state for ${requestedModelId}.${result.responseId ? ' responseIdPresent=true' : ''}${responsesReasoningItems.length > 0 ? ` responsesReasoningItems=${responsesReasoningItems.length}` : ''}${providerMemoryKey ? ` cacheKey=${providerMemoryKey.slice(0, 12)}` : ''}`,
       );
     }
 
@@ -511,6 +517,16 @@ const OPENAI_COMPATIBLE_RESERVED_CUSTOM_BODY_KEYS = new Set([
   'stream',
   'tools',
   'tool_choice',
+]);
+
+const RESPONSES_API_RESERVED_CUSTOM_BODY_KEYS = new Set([
+  'model',
+  'input',
+  'stream',
+  'store',
+  'tools',
+  'tool_choice',
+  'previous_response_id',
 ]);
 
 const LM_STUDIO_RESERVED_CUSTOM_BODY_KEYS = new Set([
@@ -583,6 +599,76 @@ function buildBackendPayload(
       toolCount: 0,
       requestOverrideKeys,
       replayedReasoningLength: syntheticReasoningReplay.replayedReasoningLength,
+      syntheticReasoningReplayLength: syntheticReasoningReplay.syntheticReasoningReplayLength,
+      usedFallbackAssistantAttachment: false,
+      usedSyntheticReasoningReplay: syntheticReasoningReplay.usedSyntheticReasoningReplay,
+      usedProviderMemoryFallback: !mapped.latestBackendState && Boolean(providerMemoryState),
+    };
+  }
+
+  if (endpointType === 'responses-api') {
+    const mapped = mapRequestMessagesToResponses(messages, hiddenStateMimeType);
+    const requestedModelId = model.id;
+    const upstreamModelId = model.upstreamId || model.id;
+    const effectiveState = mapped.latestBackendState ?? providerMemoryState;
+    const shouldStoreResponses = shouldStoreResponsesState(requestOverrides);
+    const canReusePreviousResponse = Boolean(
+      effectiveState?.responseId &&
+      effectiveState.modelId === requestedModelId &&
+      (!effectiveState.endpointType || effectiveState.endpointType === 'responses-api' || effectiveState.endpointType === 'lm-studio-responses') &&
+      shouldStoreResponses,
+    );
+
+    const shouldForwardTools = toolExposure !== 'off' && supportsToolCalling(model);
+    if (!shouldForwardTools && options.tools?.length) {
+      const reason = toolExposure === 'off'
+        ? 'backend tool forwarding is disabled for this profile'
+        : 'the selected model does not advertise tool support';
+      outputChannel.info(
+        `Suppressing ${options.tools.length} VS Code tool definition(s) for ${model.id} because ${reason}.`,
+      );
+    }
+
+    let effectiveTools = shouldForwardTools ? options.tools : undefined;
+    const advertisedToolLimit = getAdvertisedToolLimit(model);
+    if (effectiveTools?.length && advertisedToolLimit !== undefined && effectiveTools.length > advertisedToolLimit) {
+      outputChannel.info(
+        `Limiting ${effectiveTools.length} VS Code tool definition(s) to ${advertisedToolLimit} for ${model.id} because the model advertises a maximum tool count of ${advertisedToolLimit}.`,
+      );
+      effectiveTools = effectiveTools.slice(0, advertisedToolLimit);
+    }
+
+    const responsesReasoningReplayItems = getResponsesReasoningReplayItems(effectiveState, requestOverrides);
+    const syntheticReasoningReplay = attachSyntheticReasoningReplayItemToResponsesInput(
+      mapped.input,
+      effectiveState?.reasoningContent,
+      requestOverrides,
+      outputChannel,
+      responsesReasoningReplayItems.length > 0,
+    );
+
+    const tools = mapResponsesTools(effectiveTools);
+    const toolChoice = mapResponsesToolMode(options.toolMode, effectiveTools);
+    const payload = applyResponsesApiRequestOverrides(
+      {
+        model: upstreamModelId,
+        input: [...responsesReasoningReplayItems, ...mapped.input],
+        stream: true,
+        store: shouldStoreResponses,
+        previous_response_id: canReusePreviousResponse ? effectiveState?.responseId : undefined,
+        tools,
+        tool_choice: toolChoice,
+      },
+      requestOverrides,
+      outputChannel,
+    );
+
+    return {
+      payload,
+      mappedMessageCount: mapped.mappedItemCount,
+      toolCount: tools?.length ?? 0,
+      requestOverrideKeys: getConfiguredRequestOverrideKeys(endpointType, requestOverrides),
+      replayedReasoningLength: getResponsesReasoningReplayLength(responsesReasoningReplayItems),
       syntheticReasoningReplayLength: syntheticReasoningReplay.syntheticReasoningReplayLength,
       usedFallbackAssistantAttachment: false,
       usedSyntheticReasoningReplay: syntheticReasoningReplay.usedSyntheticReasoningReplay,
@@ -733,6 +819,44 @@ function applyOpenAICompatibleRequestOverrides(
   return deepMergeObjects(nextPayload, filteredCustomBody);
 }
 
+function applyResponsesApiRequestOverrides(
+  payload: ResponsesRequest,
+  requestOverrides: BackendRequestOverrides,
+  outputChannel?: vscode.LogOutputChannel,
+): Record<string, unknown> {
+  const nextPayload: Record<string, unknown> = {
+    ...payload,
+  };
+
+  if (requestOverrides.reasoningEffort) {
+    nextPayload.reasoning = {
+      ...(isPlainObject(nextPayload.reasoning) ? nextPayload.reasoning : {}),
+      effort: requestOverrides.reasoningEffort,
+    };
+  }
+
+  if (requestOverrides.maxTokens !== undefined) {
+    nextPayload.max_output_tokens = requestOverrides.maxTokens;
+  }
+
+  if (requestOverrides.temperature !== undefined) {
+    nextPayload.temperature = requestOverrides.temperature;
+  }
+
+  if (requestOverrides.topP !== undefined) {
+    nextPayload.top_p = requestOverrides.topP;
+  }
+
+  const filteredCustomBody = filterCustomBodyForEndpoint(requestOverrides.customBody, RESPONSES_API_RESERVED_CUSTOM_BODY_KEYS);
+  logStrippedCustomBodyKeys('Responses API', requestOverrides.customBody, filteredCustomBody, outputChannel);
+  const mergedPayload = deepMergeObjects(nextPayload, filteredCustomBody);
+  if (requestOverrides.preserveThinking === 'on') {
+    mergedPayload.include = appendUniqueString(mergedPayload.include, 'reasoning.encrypted_content');
+  }
+
+  return mergedPayload;
+}
+
 function applyLmStudioRequestOverrides(
   payload: LMStudioChatRequest,
   requestOverrides: BackendRequestOverrides,
@@ -825,6 +949,94 @@ function attachSyntheticReasoningReplayPromptToLmStudioPayload(
     syntheticReasoningReplayLength: replayContent.length,
     usedSyntheticReasoningReplay: true,
   };
+}
+
+function getResponsesReasoningReplayItems(
+  state: ReasoningHiddenState | undefined,
+  requestOverrides: BackendRequestOverrides,
+): ResponsesReasoningItem[] {
+  if (requestOverrides.preserveThinking !== 'on') {
+    return [];
+  }
+
+  return (state?.responsesReasoningItems ?? [])
+    .filter((item) => typeof item.encrypted_content === 'string' && item.encrypted_content.trim().length > 0)
+    .map((item) => ({
+      type: 'reasoning' as const,
+      id: item.id,
+      encrypted_content: item.encrypted_content,
+      summary: item.summary,
+      content: item.content,
+    }));
+}
+
+function getResponsesReasoningReplayLength(items: readonly ResponsesReasoningItem[]): number {
+  return items.reduce((total, item) => total + (item.encrypted_content?.length ?? 0), 0);
+}
+
+function attachSyntheticReasoningReplayItemToResponsesInput(
+  input: ResponsesInputItem[],
+  reasoningContent: string | undefined,
+  requestOverrides: BackendRequestOverrides,
+  outputChannel: vscode.LogOutputChannel,
+  hasEncryptedReasoningReplay: boolean,
+): { syntheticReasoningReplayLength: number; usedSyntheticReasoningReplay: boolean } {
+  if (hasEncryptedReasoningReplay || requestOverrides.preserveThinking !== 'on') {
+    return {
+      syntheticReasoningReplayLength: 0,
+      usedSyntheticReasoningReplay: false,
+    };
+  }
+
+  const normalizedReasoning = limitPreservedReasoningContent(
+    reasoningContent ?? '',
+    requestOverrides,
+    outputChannel,
+    'Responses API synthetic reasoning replay',
+  ).trim();
+  if (!normalizedReasoning) {
+    return {
+      syntheticReasoningReplayLength: 0,
+      usedSyntheticReasoningReplay: false,
+    };
+  }
+
+  const replayContent = buildSyntheticReasoningReplayContent(normalizedReasoning, getSyntheticReasoningReplayMaxChars(requestOverrides));
+  if (!replayContent.trim()) {
+    return {
+      syntheticReasoningReplayLength: 0,
+      usedSyntheticReasoningReplay: false,
+    };
+  }
+
+  prependResponsesSystemMessage(input, replayContent);
+
+  return {
+    syntheticReasoningReplayLength: replayContent.length,
+    usedSyntheticReasoningReplay: true,
+  };
+}
+
+function prependResponsesSystemMessage(input: ResponsesInputItem[], content: string): void {
+  const normalizedContent = content.trim();
+  if (!normalizedContent) {
+    return;
+  }
+
+  const firstMessage = input.find((item): item is ResponsesInputItem & { role: 'system'; content: unknown } => {
+    return 'role' in item && item.role === 'system' && 'content' in item;
+  });
+  if (firstMessage && typeof firstMessage.content === 'string') {
+    firstMessage.content = firstMessage.content.trim()
+      ? `${firstMessage.content.trim()}\n\n${normalizedContent}`
+      : normalizedContent;
+    return;
+  }
+
+  input.unshift({
+    role: 'system',
+    content: normalizedContent,
+  });
 }
 
 function attachReasoningStateToOpenAIMessages(
@@ -975,7 +1187,7 @@ function getConfiguredRequestOverrideKeys(
 ): string[] {
   const keys: string[] = [];
 
-  if (endpointType === 'openai-compatible' && requestOverrides.reasoningEffort) {
+  if ((endpointType === 'openai-compatible' || endpointType === 'responses-api') && requestOverrides.reasoningEffort) {
     keys.push('reasoning_effort');
   }
 
@@ -991,6 +1203,10 @@ function getConfiguredRequestOverrideKeys(
     keys.push('preserve_thinking');
   }
 
+  if (endpointType === 'responses-api' && requestOverrides.responsesStore !== 'auto') {
+    keys.push('store');
+  }
+
   if (requestOverrides.preservedThinkingMaxChars !== undefined) {
     keys.push('preserved_thinking_max_chars');
   }
@@ -1004,7 +1220,7 @@ function getConfiguredRequestOverrideKeys(
   }
 
   if (requestOverrides.maxTokens !== undefined) {
-    keys.push(endpointType === 'lm-studio-rest' ? 'max_output_tokens' : 'max_tokens');
+    keys.push(endpointType === 'lm-studio-rest' || endpointType === 'responses-api' ? 'max_output_tokens' : 'max_tokens');
   }
 
   if (requestOverrides.temperature !== undefined) {
@@ -1033,7 +1249,9 @@ function getConfiguredRequestOverrideKeys(
 
   const customBodyKeys = endpointType === 'lm-studio-rest'
     ? Object.keys(filterCustomBodyForEndpoint(requestOverrides.customBody, LM_STUDIO_RESERVED_CUSTOM_BODY_KEYS))
-    : Object.keys(filterCustomBodyForEndpoint(requestOverrides.customBody, OPENAI_COMPATIBLE_RESERVED_CUSTOM_BODY_KEYS));
+    : endpointType === 'responses-api'
+      ? Object.keys(filterCustomBodyForEndpoint(requestOverrides.customBody, RESPONSES_API_RESERVED_CUSTOM_BODY_KEYS))
+      : Object.keys(filterCustomBodyForEndpoint(requestOverrides.customBody, OPENAI_COMPATIBLE_RESERVED_CUSTOM_BODY_KEYS));
 
   for (const key of customBodyKeys) {
     if (!keys.includes(key)) {
@@ -1093,6 +1311,30 @@ function toOptionalBoolean(mode: BackendRequestOverrides['enableThinking']): boo
   }
 
   return undefined;
+}
+
+function shouldStoreResponsesState(requestOverrides: BackendRequestOverrides): boolean {
+  if (requestOverrides.responsesStore === 'on') {
+    return true;
+  }
+
+  if (requestOverrides.responsesStore === 'off') {
+    return false;
+  }
+
+  return requestOverrides.customBody.store === true;
+}
+
+function appendUniqueString(value: unknown, item: string): string[] {
+  const values = Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+    : [];
+
+  if (!values.includes(item)) {
+    values.push(item);
+  }
+
+  return values;
 }
 
 function deepMergeObjects(base: Record<string, unknown>, override: Record<string, unknown>): Record<string, unknown> {
@@ -1189,7 +1431,11 @@ function buildEmptyAssistantOutputErrorMessage(
 ): string {
   const normalizedFinishReason = finishReason?.trim() || 'unknown';
   const reasoningOnly = reasoningContent.trim().length > 0;
-  const endpointLabel = endpointType === 'lm-studio-rest' ? 'LM Studio Native' : 'OpenAI-compatible';
+  const endpointLabel = endpointType === 'lm-studio-rest'
+    ? 'LM Studio Native'
+    : endpointType === 'responses-api'
+      ? 'Responses API'
+      : 'OpenAI-compatible';
   const detail = reasoningOnly
     ? 'The backend returned hidden reasoning_content but no visible assistant text after the last tool or chat turn.'
     : 'The backend ended the turn without visible assistant text or tool calls.';
@@ -1213,8 +1459,19 @@ function summarizeBackendPayload(payload: Record<string, unknown>): Record<strin
     summary.lastAssistantReasoningLength = findLastAssistantReasoningLength(payload.messages);
   }
 
+  if (Array.isArray(payload.input)) {
+    summary.inputItemCount = payload.input.length;
+    summary.reasoningItems = payload.input.filter((item) => isPayloadItemType(item, 'reasoning')).length;
+    summary.functionCallItems = payload.input.filter((item) => isPayloadItemType(item, 'function_call')).length;
+    summary.functionCallOutputItems = payload.input.filter((item) => isPayloadItemType(item, 'function_call_output')).length;
+  }
+
   if (typeof payload.previous_response_id === 'string' && payload.previous_response_id.trim()) {
     summary.previousResponseIdPresent = true;
+  }
+
+  if (typeof payload.store === 'boolean') {
+    summary.store = payload.store;
   }
 
   if (typeof payload.system_prompt === 'string' && payload.system_prompt.trim()) {
@@ -1234,6 +1491,10 @@ function isAssistantPayloadMessage(message: unknown): message is { role: 'assist
 
 function isSystemPayloadMessage(message: unknown): message is { role: 'system'; content?: unknown } {
   return Boolean(message && typeof message === 'object' && (message as { role?: unknown }).role === 'system');
+}
+
+function isPayloadItemType(item: unknown, type: string): boolean {
+  return Boolean(item && typeof item === 'object' && (item as { type?: unknown }).type === type);
 }
 
 function hasAssistantReasoningContent(message: unknown): message is { role: 'assistant'; reasoning_content: string } {

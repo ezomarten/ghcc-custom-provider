@@ -15,7 +15,7 @@ export const CONVERSATION_STATE_STORAGE_FILE_NAME = 'conversation-state-cache.js
 export const BACKEND_API_KEY_SECRET_KEY = 'ghccCustomProvider.backendApiKey';
 export const BACKEND_API_KEY_SECRET_PREFIX = 'ghccCustomProvider.backendApiKey:';
 
-const ENDPOINT_TYPES = new Set<BackendEndpointType>(['openai-compatible', 'lm-studio', 'lm-studio-rest']);
+const ENDPOINT_TYPES = new Set<BackendEndpointType>(['openai-compatible', 'responses-api', 'lm-studio', 'lm-studio-responses', 'lm-studio-rest']);
 const TOGGLE_MODES = new Set<SettingToggleMode>(['auto', 'on', 'off']);
 const API_KEY_SOURCES = new Set<ApiKeySource>(['secret-storage', 'environment']);
 const LM_STUDIO_REASONING_MODES = new Set<LmStudioReasoningMode>(['auto', 'off', 'low', 'medium', 'high', 'on']);
@@ -34,7 +34,7 @@ const MAX_CONVERSATION_TTL_MINUTES = 525_600;
 const MAX_CONVERSATION_ENTRIES = 5_000;
 const LEGACY_REASONING_MODEL_SUFFIX = '::reasoning';
 
-export type BackendEndpointType = 'openai-compatible' | 'lm-studio' | 'lm-studio-rest';
+export type BackendEndpointType = 'openai-compatible' | 'responses-api' | 'lm-studio' | 'lm-studio-responses' | 'lm-studio-rest';
 export type SettingToggleMode = 'auto' | 'on' | 'off';
 export type ApiKeySource = 'secret-storage' | 'environment';
 export type LmStudioReasoningMode = 'auto' | 'off' | 'low' | 'medium' | 'high' | 'on';
@@ -45,6 +45,7 @@ export interface BackendRequestOverrides {
   lmStudioReasoning: LmStudioReasoningMode;
   enableThinking: SettingToggleMode;
   preserveThinking: SettingToggleMode;
+  responsesStore: SettingToggleMode;
   preservedThinkingMaxChars?: number;
   syntheticReasoningReplayMaxChars?: number;
   contextLength?: number;
@@ -150,6 +151,7 @@ export function createDefaultBackendEndpointSettings(
       lmStudioReasoning: 'auto',
       enableThinking: 'auto',
       preserveThinking: 'auto',
+      responsesStore: 'auto',
       preservedThinkingMaxChars: undefined,
       syntheticReasoningReplayMaxChars: undefined,
       contextLength: undefined,
@@ -398,6 +400,7 @@ export function sanitizeRequestOverrides(raw: unknown): BackendRequestOverrides 
     lmStudioReasoning: normalizeLmStudioReasoningMode(source.lmStudioReasoning),
     enableThinking: normalizeToggleMode(source.enableThinking),
     preserveThinking: normalizeToggleMode(source.preserveThinking),
+    responsesStore: normalizeToggleMode(source.responsesStore),
     preservedThinkingMaxChars: parseOptionalThinkingCharLimit(source.preservedThinkingMaxChars, MAX_PRESERVED_THINKING_CHARS),
     syntheticReasoningReplayMaxChars: parseOptionalThinkingCharLimit(source.syntheticReasoningReplayMaxChars, MAX_PRESERVED_THINKING_CHARS),
     contextLength: parseOptionalInteger(source.contextLength, MAX_CONTEXT_LENGTH),
@@ -771,11 +774,19 @@ function getSettingState<T>(configuration: vscode.WorkspaceConfiguration, key: s
 }
 
 export function getChatEndpointType(endpointType: BackendEndpointType): BackendEndpointType {
-  return endpointType === 'lm-studio' ? 'openai-compatible' : endpointType;
+  if (endpointType === 'lm-studio') {
+    return 'openai-compatible';
+  }
+
+  if (endpointType === 'lm-studio-responses') {
+    return 'responses-api';
+  }
+
+  return endpointType;
 }
 
 export function getModelDiscoveryEndpointType(endpointType: BackendEndpointType): BackendEndpointType {
-  return endpointType === 'lm-studio' ? 'lm-studio-rest' : endpointType;
+  return endpointType === 'lm-studio' || endpointType === 'lm-studio-responses' ? 'lm-studio-rest' : endpointType;
 }
 
 export function getRuntimeEndpointBaseUrl(endpoint: Pick<BackendEndpointSettings, 'baseUrl' | 'localhostRewrite'>, remoteName = vscode.env.remoteName): string {

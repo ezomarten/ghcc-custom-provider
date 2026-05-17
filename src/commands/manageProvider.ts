@@ -387,7 +387,9 @@ async function renderPanelHtml(
               <dd>
                 <select id="endpointType">
                   <option value="openai-compatible">${text.endpoint.openAiCompatible}</option>
+                  <option value="responses-api">${text.endpoint.responsesApi}</option>
                   <option value="lm-studio">${text.endpoint.lmStudio}</option>
+                  <option value="lm-studio-responses">${text.endpoint.lmStudioResponses}</option>
                   <option value="lm-studio-rest">${text.endpoint.lmStudioNative}</option>
                 </select>
                 <div class="hint">${text.endpoint.typeHint}</div>
@@ -492,6 +494,15 @@ async function renderPanelHtml(
                   <option value="off">${text.requestOverrides.off}</option>
                 </select>
                 <div class="hint">${text.requestOverrides.preserveThinkingHint}</div>
+              </dd>
+              <dt>${text.requestOverrides.responsesStore}</dt>
+              <dd>
+                <select id="responsesStore">
+                  <option value="auto">${text.requestOverrides.auto}</option>
+                  <option value="on">${text.requestOverrides.on}</option>
+                  <option value="off">${text.requestOverrides.off}</option>
+                </select>
+                <div class="hint">${text.requestOverrides.responsesStoreHint}</div>
               </dd>
               <dt>${text.requestOverrides.preservedThinkingMaxChars}</dt>
               <dd>
@@ -1178,6 +1189,7 @@ const elements = {
   lmStudioReasoning: document.getElementById('lmStudioReasoning'),
   enableThinking: document.getElementById('enableThinking'),
   preserveThinking: document.getElementById('preserveThinking'),
+  responsesStore: document.getElementById('responsesStore'),
   preservedThinkingMaxChars: document.getElementById('preservedThinkingMaxChars'),
   syntheticReasoningReplayMaxChars: document.getElementById('syntheticReasoningReplayMaxChars'),
   testConnectionButton: document.getElementById('testConnectionButton'),
@@ -1593,6 +1605,7 @@ function attachEventHandlers() {
     elements.lmStudioReasoning,
     elements.enableThinking,
     elements.preserveThinking,
+    elements.responsesStore,
     elements.preservedThinkingMaxChars,
     elements.syntheticReasoningReplayMaxChars,
     elements.contextLength,
@@ -1800,6 +1813,7 @@ function populateEndpointInputs(endpoint) {
   elements.lmStudioReasoning.value = endpoint.requestOverrides.lmStudioReasoning || 'auto';
   elements.enableThinking.value = endpoint.requestOverrides.enableThinking || 'auto';
   elements.preserveThinking.value = endpoint.requestOverrides.preserveThinking || 'auto';
+  elements.responsesStore.value = endpoint.requestOverrides.responsesStore || 'auto';
   elements.preservedThinkingMaxChars.value = stringifyOptionalNumber(endpoint.requestOverrides.preservedThinkingMaxChars);
   elements.syntheticReasoningReplayMaxChars.value = stringifyOptionalNumber(endpoint.requestOverrides.syntheticReasoningReplayMaxChars);
   elements.contextLength.value = stringifyOptionalNumber(endpoint.requestOverrides.contextLength);
@@ -1816,8 +1830,16 @@ function populateEndpointInputs(endpoint) {
 }
 
 function getEndpointTypeLabel(endpointType) {
+  if (endpointType === 'responses-api') {
+    return text.endpoint.responsesApi;
+  }
+
   if (endpointType === 'lm-studio') {
     return text.endpoint.lmStudio;
+  }
+
+  if (endpointType === 'lm-studio-responses') {
+    return text.endpoint.lmStudioResponses;
   }
 
   if (endpointType === 'lm-studio-rest') {
@@ -1828,8 +1850,16 @@ function getEndpointTypeLabel(endpointType) {
 }
 
 function getEndpointTypeDescription(endpointType) {
+  if (endpointType === 'responses-api') {
+    return text.endpoint.typeDescriptions.responsesApi;
+  }
+
   if (endpointType === 'lm-studio') {
     return text.endpoint.typeDescriptions.lmStudio;
+  }
+
+  if (endpointType === 'lm-studio-responses') {
+    return text.endpoint.typeDescriptions.lmStudioResponses;
   }
 
   if (endpointType === 'lm-studio-rest') {
@@ -1934,6 +1964,7 @@ function syncSelectedEndpointFromInputs() {
   endpoint.requestOverrides.lmStudioReasoning = normalizeLmStudioReasoning(elements.lmStudioReasoning.value);
   endpoint.requestOverrides.enableThinking = normalizeToggleMode(elements.enableThinking.value);
   endpoint.requestOverrides.preserveThinking = normalizeToggleMode(elements.preserveThinking.value);
+  endpoint.requestOverrides.responsesStore = normalizeToggleMode(elements.responsesStore.value);
   endpoint.requestOverrides.preservedThinkingMaxChars = parseOptionalThinkingCharLimit(elements.preservedThinkingMaxChars.value);
   endpoint.requestOverrides.syntheticReasoningReplayMaxChars = parseOptionalThinkingCharLimit(elements.syntheticReasoningReplayMaxChars.value);
   endpoint.requestOverrides.contextLength = parseOptionalPositiveInteger(elements.contextLength.value);
@@ -2117,6 +2148,7 @@ function createEndpointTemplate(index) {
       lmStudioReasoning: 'auto',
       enableThinking: 'auto',
       preserveThinking: 'auto',
+      responsesStore: 'auto',
       preservedThinkingMaxChars: undefined,
       syntheticReasoningReplayMaxChars: undefined,
       contextLength: undefined,
@@ -2212,7 +2244,7 @@ function normalizeToggleMode(value) {
 }
 
 function normalizeEndpointType(value) {
-  return value === 'lm-studio' || value === 'lm-studio-rest' ? value : 'openai-compatible';
+  return value === 'responses-api' || value === 'lm-studio' || value === 'lm-studio-responses' || value === 'lm-studio-rest' ? value : 'openai-compatible';
 }
 
 function normalizeApiKeySource(value) {
@@ -2497,7 +2529,7 @@ function sanitizeConnectionTestRequest(message: unknown): {
 }
 
 function normalizeBackendEndpointType(value: string | undefined): BackendEndpointType {
-  return value === 'lm-studio' || value === 'lm-studio-rest' ? value : 'openai-compatible';
+  return value === 'responses-api' || value === 'lm-studio' || value === 'lm-studio-responses' || value === 'lm-studio-rest' ? value : 'openai-compatible';
 }
 
 function normalizeBackendToggleMode(value: string | undefined): 'auto' | 'on' | 'off' {

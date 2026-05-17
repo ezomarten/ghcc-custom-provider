@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Add an [Unreleased] section only while unpublished changes exist. Remove it again when shipping a release if nothing remains unreleased.
 
+## [0.1.5] - 2026-05-17
+
+### Added
+- Added explicit Responses API endpoint types for OpenAI-compatible and LM Studio backends, including manager labels that distinguish Chat Completions, Responses, and LM Studio Native modes.
+- Added a dedicated `Store Responses state` request option so stateful `/v1/responses` continuation can be enabled without relying on advanced custom JSON.
+
+### Changed
+- Responses API preserve-thinking now requests `reasoning.encrypted_content`, stores returned reasoning items in hidden state, and replays them on the next turn while keeping `store: false` as the default.
+- The manager UI and documentation now explain stateless encrypted-reasoning replay separately from stateful `previous_response_id` continuation, while `Auto` still honors legacy custom JSON `{ "store": true }` for compatibility.
+
+### Fixed
+- Fixed `Preserve thinking` continuity for Responses API backends so follow-up turns can reuse hidden reasoning instead of losing it after the first turn.
+
 ## [0.1.4] - 2026-05-11
 
 ### Added
